@@ -2,6 +2,10 @@
 
 Data: 2026-10-14. Horarios deste documento: America/Sao_Paulo.
 
+`HISTORICO`: este documento registra a primeira etapa. A continuacao, com
+correcoes experimentais e o impedimento da validacao nativa, esta em
+[CONNECTION_RECOVERY.md](CONNECTION_RECOVERY.md).
+
 ## Objetivo e estado do projeto
 
 `DECISAO`: criar um fork separado, comparar a instalacao de uso diario com o original atual e investigar o travamento antes de substituir o plugin ou alterar o jogo.

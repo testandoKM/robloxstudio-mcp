@@ -241,6 +241,7 @@ function activatePlugin() {
 
 	StudioWebSocket.start({
 		serverUrl: conn.serverUrl,
+		registerOnSocket: true,
 		dispatchRequest: dispatchSocketRequest,
 		onStatus: handleStatus,
 		onHeartbeat: handleHeartbeat,

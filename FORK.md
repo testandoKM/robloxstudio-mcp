@@ -12,6 +12,11 @@
 
 Leia [o relatorio de conexao](docs/fork/CONNECTION_INVESTIGATION.md). O diagnostico coleta apenas campos permitidos de `/health` e, opcionalmente, uma consulta `get_place_info`. Nao inicia outro servidor, troca portas, instala plugin nem altera o DataModel.
 
+A continuacao esta em [correcao experimental da abertura do canal](docs/fork/CONNECTION_RECOVERY.md).
+A versao `3.2.2-fork.1` prepara registro direto por WebSocket e limita chamadas
+nativas pendentes. A validacao em uma nova janela da VFX TEST ainda esta pendente;
+o artefato nao deve substituir a instalacao de uso diario nesta etapa.
+
 ```powershell
 node scripts/fork/connection-snapshot.mjs --samples 3 --interval-ms 12000 --probe --output local/connection-snapshot.json
 node scripts/fork/compare-transport-regression.mjs

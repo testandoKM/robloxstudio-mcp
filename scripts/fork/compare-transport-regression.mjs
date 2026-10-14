@@ -8,30 +8,27 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const core = path.join(root, 'packages/core');
-const originalTest = path.join(core, 'src/__tests__/studio-transport.test.ts');
 const suffix = `${process.pid}-${Date.now()}`;
-const baselineName = `studio-transport-${suffix}.local`;
-const baselineSource = path.join(core, `src/${baselineName}.ts`);
-const baselineTest = path.join(core, `src/__tests__/studio-transport-${suffix}.local.test.ts`);
 const local = path.join(root, 'local/transport-comparison');
 const pattern = 'keeps a peer that answers pings|a disconnect frame unregisters';
 const gitFile = (ref, file) => execFileSync('git', ['show', `${ref}:${file}`], { cwd: root, encoding: 'utf8' });
-const normalizedFile = (file) => readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 
 assert.equal(gitFile('v3.2.0', 'packages/core/src/bridge-service.ts'), gitFile('v3.2.1', 'packages/core/src/bridge-service.ts'), 'Bridge changed: compare the complete baseline instead');
-assert.equal(normalizedFile(originalTest), gitFile('v3.2.1', 'packages/core/src/__tests__/studio-transport.test.ts'), 'Upstream regression suite has local changes');
-assert.equal(normalizedFile(path.join(core, 'src/studio-transport.ts')), gitFile('v3.2.1', 'packages/core/src/studio-transport.ts'), 'Current transport has local changes');
 mkdirSync(local, { recursive: true });
 const ownedFiles = [];
 try {
-  writeFileSync(baselineSource, gitFile('v3.2.0', 'packages/core/src/studio-transport.ts'), { flag: 'wx' });
-  ownedFiles.push(baselineSource);
-  const test = readFileSync(originalTest, 'utf8').replace("from '../studio-transport.js'", `from '../${baselineName}.js'`);
-  assert.notEqual(test, readFileSync(originalTest, 'utf8'), 'Transport import was not redirected');
-  writeFileSync(baselineTest, test, { flag: 'wx' });
-  ownedFiles.push(baselineTest);
+  const upstreamTest = gitFile('v3.2.1', 'packages/core/src/__tests__/studio-transport.test.ts');
   const results = [];
-  for (const [version, testPath, expectedFailures] of [['3.2.1', originalTest, 0], ['3.2.0', baselineTest, 2]]) {
+  for (const [version, expectedFailures] of [['3.2.1', 0], ['3.2.0', 2]]) {
+    const sourceName = `studio-transport-${version}-${suffix}.local`;
+    const sourcePath = path.join(core, `src/${sourceName}.ts`);
+    const testPath = path.join(core, `src/__tests__/${sourceName}.test.ts`);
+    writeFileSync(sourcePath, gitFile(`v${version}`, 'packages/core/src/studio-transport.ts'), { flag: 'wx' });
+    ownedFiles.push(sourcePath);
+    const test = upstreamTest.replace("from '../studio-transport.js'", `from '../${sourceName}.js'`);
+    assert.notEqual(test, upstreamTest, 'Transport import was not redirected');
+    writeFileSync(testPath, test, { flag: 'wx' });
+    ownedFiles.push(testPath);
     const output = path.join(local, `${version}-${suffix}.json`);
     const run = spawnSync(process.execPath, [
       path.join(root, 'node_modules/jest/bin/jest.js'),

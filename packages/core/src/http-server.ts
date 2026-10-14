@@ -1,5 +1,5 @@
 import express from 'express';
-import type { ErrorRequestHandler, Express } from 'express';
+import type { ErrorRequestHandler, Express, Request } from 'express';
 import http from 'http';
 import { randomBytes } from 'node:crypto';
 import type { Duplex } from 'node:stream';
@@ -46,6 +46,13 @@ interface StreamableHttpConfig {
   version: string;
   tools: ToolDefinition[];
 }
+
+interface StudioReadyWriter {
+  status(code: number): StudioReadyWriter;
+  json(body: unknown): unknown;
+}
+
+const MAX_SOCKET_REGISTRATION_BYTES = 4096;
 
 // Explicit wire endpoints: public tool names do not always match Studio handlers.
 // Never grant execute-luau through a read tool that happens to use generated Luau.
@@ -397,7 +404,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
       rejectStudioUpgrade(socket, 400, 'invalid_websocket_url');
       return;
     }
-    if (url.pathname !== '/studio') {
+    if (url.pathname !== '/studio' && url.pathname !== '/studio/connect') {
       rejectStudioUpgrade(socket, 404, 'unknown_websocket_endpoint');
       return;
     }
@@ -409,6 +416,62 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     if (req.method !== 'GET' || url.searchParams.getAll('protocolVersion').length !== 1
       || url.searchParams.get('protocolVersion') !== String(STUDIO_PROTOCOL_VERSION)) {
       rejectStudioUpgrade(socket, 426, 'studio_protocol_mismatch');
+      return;
+    }
+    if (url.pathname === '/studio/connect') {
+      // Same native registration boundary as /ready, without consuming any
+      // Studio plugin HTTP request slot. Metadata contains no credentials.
+      const registration = url.searchParams.get('registration');
+      if (!registration || url.searchParams.getAll('registration').length !== 1
+        || Buffer.byteLength(registration, 'utf8') > MAX_SOCKET_REGISTRATION_BYTES) {
+        rejectStudioUpgrade(socket, 400, 'invalid_socket_registration');
+        return;
+      }
+      let payload: Record<string, unknown>;
+      try {
+        const decoded: unknown = JSON.parse(registration);
+        if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) throw new Error('invalid');
+        payload = decoded as Record<string, unknown>;
+      } catch {
+        rejectStudioUpgrade(socket, 400, 'invalid_socket_registration');
+        return;
+      }
+      const peerId = payload.peerId;
+      if (typeof peerId !== 'string' || payload.transportPeerId !== peerId
+        || !studioTransport.canOpen(peerId)) {
+        rejectStudioUpgrade(socket, 403, 'socket_registration_not_admitted');
+        return;
+      }
+      let status = 200;
+      let reply: unknown;
+      const writer: StudioReadyWriter = {
+        status(code) { status = code; return writer; },
+        json(body) { reply = body; },
+      };
+      try {
+        handleReady({ body: payload }, writer);
+      } catch {
+        // Upgrade listeners do not have Express's exception boundary.
+        rejectStudioUpgrade(socket, 500, 'socket_registration_failed');
+        return;
+      }
+      if (status !== 200 || reply === null || typeof reply !== 'object') {
+        rejectStudioUpgrade(socket, status === 200 ? 500 : status, 'socket_registration_rejected');
+        return;
+      }
+      const ready = reply as Record<string, unknown>;
+      if (ready.success !== true || typeof ready.transportToken !== 'string') {
+        rejectStudioUpgrade(socket, 403, 'socket_registration_not_transport_owner');
+        return;
+      }
+      webSocketServer.handleUpgrade(req, socket, head, (webSocket) => {
+        webSocket.on('error', () => { /* Never log credential-bearing native request data. */ });
+        webSocket.send(JSON.stringify({ ...ready, kind: 'ready' }), (error) => {
+          if (error || closed) { webSocket.close(1011, 'socket_registration_delivery_failed'); return; }
+          const handle = studioTransport.open(peerId, webSocket, () => eventStatus(peerId));
+          if (!handle) webSocket.close(1013, 'studio_socket_capacity_reached');
+        });
+      });
       return;
     }
     const peerId = url.searchParams.get('peerId');
@@ -561,13 +624,16 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
       pendingRequests: bridge.getPendingRequestCount(),
       proxyInstanceCount: proxyInstances.size,
       activeWebSockets: studioTransport.activeSocketCount,
+      transportConnected: studioTransport.activeSocketCount > 0,
+      connectionState: studioTransport.activeSocketCount > 0 ? 'transport_open'
+        : peers.length > 0 ? 'registered_without_transport' : 'disconnected',
       studioSocketCapacity: MAX_ACTIVE_STUDIO_SOCKETS,
       streamableHttp: !!serverConfig,
     });
   });
 
 
-  app.post('/ready', (req, res) => {
+  const handleReady = (req: Pick<Request, 'body'>, res: StudioReadyWriter): void => {
     const {
       peerId,
       transportPeerId,
@@ -757,7 +823,8 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
       serverVersion,
       ...(!isProxiedPeer ? { protocolVersion: STUDIO_PROTOCOL_VERSION, transportToken } : {}),
     });
-  });
+  };
+  app.post('/ready', handleReady);
 
 
   app.post('/disconnect', (req, res) => {
