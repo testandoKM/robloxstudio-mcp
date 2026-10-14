@@ -14,8 +14,9 @@ Leia [o relatorio de conexao](docs/fork/CONNECTION_INVESTIGATION.md). O diagnost
 
 A continuacao esta em [correcao experimental da abertura do canal](docs/fork/CONNECTION_RECOVERY.md).
 A versao `3.2.2-fork.1` prepara registro direto por WebSocket e limita chamadas
-nativas pendentes. A validacao em uma nova janela da VFX TEST ainda esta pendente;
-o artefato nao deve substituir a instalacao de uso diario nesta etapa.
+nativas pendentes. Abertura do canal, consulta e reconexao passaram em uma nova
+janela da VFX TEST. Os gates do plugin completo com Play/Stop ainda dependem
+do perfil Windows de testes; o artefato continua separado da instalacao de uso diario.
 
 ```powershell
 node scripts/fork/connection-snapshot.mjs --samples 3 --interval-ms 12000 --probe --output local/connection-snapshot.json

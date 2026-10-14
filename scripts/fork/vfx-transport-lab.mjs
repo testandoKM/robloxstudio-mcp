@@ -158,7 +158,6 @@ return {prepared=true};`);
     report.events.push({ event: 'fixed_reconnected_without_http_registration' });
   }
 } finally {
-  releaseHeld(); clearTimeout(safetyRelease);
   if (fixtureCreated) {
     try {
       report.nativeRequestState = await control(`local f=_G[${lua(key)}]; return f and {ready=f.ready,updates=f.updates} or {missing=true}`);
@@ -166,6 +165,9 @@ return {prepared=true};`);
       report.fixtureCleaned = true;
     } catch (error) { report.fixtureCleaned = false; report.cleanupError = error.message; }
   }
+  // Stop the fixture before releasing its stalled registration. Otherwise the
+  // old transport can briefly reconnect while cleanup is still being relayed.
+  releaseHeld(); clearTimeout(safetyRelease);
   await app.cleanup(); bridge.clearAllPendingRequests();
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));

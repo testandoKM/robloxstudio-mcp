@@ -1,7 +1,8 @@
 # Correcao experimental da abertura do canal
 
 Data: 2026-10-14. Branch: `codex/connection-investigation`.
-Versao preparada: `3.2.2-fork.1`. Estado: **validacao nativa pendente; nao instalar na sessao principal**.
+Versao preparada: `3.2.2-fork.1`. Estado: **canal e reconexao validados na VFX TEST;
+gates do plugin completo pendentes; instalacao principal preservada**.
 
 ## Escopo autorizado
 
@@ -105,12 +106,53 @@ MCP global foi alterada. O MCP oficial foi usado como controlador auxiliar apos
 falhas do Chrrxs, inclusive falta da capacidade `LocalUser` para o ajuste
 temporario de HTTP.
 
-**Pendente:** o fork ainda nao passou pelo teste de conexao nativa na janela
-nova, nem pelos gates de plugin completo e Play/Stop de `tests/README.md`.
-Testes de servidor com WebSocket real em Node e testes simulados do plugin nao
-substituem esses gates.
+## Validacao nativa na nova VFX TEST
 
-A tentativa unica de abrir outro Studio pelo lancador protegido foi recusada
+`DECISAO`: o usuario confirmou a atualizacao e abriu uma nova janela de VFX TEST.
+
+`CONFIRMADO`: a nova sessao foi descoberta novamente nas duas conexoes MCP,
+com identidade `instance:ofh-sy4` no Chrrxs e
+`cb7139fe-b76b-4302-a975-d88b6714beb6` no controlador oficial. Place/game e
+conteudo do Workspace foram conferidos antes da escrita. O Chrrxs instalado
+voltou a responder `get_place_info` e `execute_luau` nessa janela nova.
+
+`CONFIRMADO` no comparativo nativo, com os mesmos fontes compilados e servidor
+isolado que reteve `/ready` HTTP:
+
+| Etapa | Resultado |
+| --- | --- |
+| Transporte original 3.2.1, registro HTTP retido | Sem canal apos 20 segundos; timeout de registro reproduzido |
+| Transporte do fork, mesmo bloqueio HTTP | Canal aberto por `/studio/connect`; `get_place_info` respondeu VFX TEST |
+| Servidor de teste derruba somente seu socket | Fork reconectou sozinho e outra consulta respondeu VFX TEST |
+| Dependencia de `/ready` HTTP no fork | Nenhuma requisicao de registro HTTP nas duas conexoes |
+| Limpeza | Fixture removido, HTTP restaurado a `false`, Studio em Edit e Chrrxs original ainda respondendo |
+
+Evidencias locais: `vfx-baseline-bd006de9a496.json` e
+`vfx-fixed-edd7f2d524d6.json`. O fork usou o transporte compilado com SHA-256
+`93886823364e79bd045499947af13c501a7999652a988ae2af4d4b95a2df8045` e o
+artefato ja registrado acima, sem substituir o arquivo instalado. O teste usa
+o componente de transporte real no Studio, com adaptadores de metadados e
+handlers restritos; nao carrega o plugin inteiro.
+
+`CONFIRMADO`: no fixture antigo, liberar a resposta HTTP antes de parar o
+transporte permitia uma abertura adicional durante a limpeza. O fixture agora
+para o transporte antes de liberar as respostas retidas. Isso melhora o
+isolamento do teste; nao e uma mudanca no plugin distribuido. Essa ordem foi
+retestada nativamente em `vfx-baseline-a18398b4d5cc.json`: bloqueio reproduzido,
+fixture limpo e nenhuma abertura adicional de socket durante a liberacao.
+
+**Pendente:** gates de plugin completo e Play/Stop de `tests/README.md`. O
+diagnostico publico `npm run studio:test-diagnose` foi tentado e falhou antes
+de abrir Studio: o Windows nao conseguiu resolver a conta padrao `StudioTests`.
+Nao foi criada conta Windows, alterada credencial nem aplicado desvio ao perfil
+obrigatorio. O usuario confirmou que nao possui uma conta de testes separada.
+Nenhuma configuracao de Windows foi criada por esta task. O teste de componente
+acima nao substitui esses gates nem comprova recuperacao de um limite nativo ja
+saturado.
+
+## Impedimento anterior de abertura automatica
+
+`HISTORICO`: a tentativa unica de abrir outro Studio pelo lancador protegido foi recusada
 antes da criacao do processo: uma instalacao nova tinha um download
 `.crdownload` incompleto. Nenhum executavel antigo foi usado para contornar a
 verificacao. Foi solicitado ao usuario concluir a atualizacao e abrir uma nova
@@ -118,9 +160,15 @@ VFX TEST. A regra de [tests/README.md](../../tests/README.md) e explicita:
 "If Studio reports login, rate-limit, or missing/corrupt-file errors, stop and
 address the environment before attempting another launch."
 
+Na retomada, o usuario abriu manualmente a VFX TEST usando a instalacao nova.
+Um marcador `.crdownload` ainda estava presente nessa pasta; nao foi removido
+nem usado um lancador para contornar a verificacao. Os testes de componente
+usaram apenas a janela ja aberta. Antes de futuros lancamentos automaticos,
+conferir/finalizar a instalacao pelo procedimento proprio do repositorio.
+
 ## Como retomar a verificacao
 
-1. Concluir a atualizacao e obter uma nova janela de VFX TEST. Descobrir seus
+1. Para repetir, obter uma nova janela de VFX TEST. Descobrir seus
    IDs novamente, confirmar place/game e conteudo, e conferir que nao ha
    fixtures pendentes. Nao reutilizar o ID como prova de um processo novo.
 2. Preparar os builds, usar apenas a VFX TEST para o fixture e registrar o valor
