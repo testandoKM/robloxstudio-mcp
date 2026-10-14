@@ -3606,7 +3606,7 @@ export class RobloxStudioTools {
     };
   }
 
-  async stopPlaytest(instance_id?: string, timeout = 15) {
+  async stopPlaytest(instance_id?: string, timeout = 120) {
     // The edit DM's stopPlaytest handler writes a plugin:SetSetting request
     // that StopPlayMonitor reads from inside the play-server DM (the only DM where
     // StudioTestService:EndTest is legal). The cross-DM signal works independently
@@ -3614,6 +3614,7 @@ export class RobloxStudioTools {
     const refresh = this.bridge.refreshTopologyForRouting();
     if (refresh) await refresh;
     const { instanceId } = this._resolveSingleTarget('edit', instance_id);
+    const deadline = Date.now() + Math.max(0, timeout) * 1000;
     let response: Record<string, unknown>;
     let stopRequestError: string | undefined;
     try {
@@ -3626,6 +3627,28 @@ export class RobloxStudioTools {
         detail: stopRequestError,
       };
     }
+    // Native EndTest returns before Execute* unwinds and EditModeActive settles.
+    // A peer disappearing (or the viewport showing Edit) is insufficient. New
+    // plugins explicitly opt in to read-only observation after an accepted stop;
+    // never resend the stop or mask an EndTest/admission failure.
+    if (response.stopSignalAccepted === true && response.teardownPending === true) {
+      response = { ...response, success: false };
+      let observationError: string | undefined;
+      while (Date.now() < deadline) {
+        try {
+          const state = await this._request('/api/playtest-state', {}, instanceId, 'edit', Math.max(1, Math.min(5000, deadline - Date.now())));
+          response = { ...response, editModeReady: state.editModeReady, playtestTaskPending: state.playtestTaskPending };
+          if (state.editModeReady === true && state.playtestTaskPending === false) {
+            response = { success: true, message: 'Playtest stopped.', stopSignalAccepted: true,
+              editModeReady: true, playtestTaskPending: false, teardownPending: false };
+            break;
+          }
+        } catch (error) { observationError = errorMessage(error); }
+        await sleep(Math.min(1000, Math.max(0, deadline - Date.now())));
+      }
+      if (response.success !== true) response = { ...response, success: false, timedOut: true, observationError };
+    }
+    timeout = Math.max(0, (deadline - Date.now()) / 1000);
     let wait: { ok: boolean; roles: string[]; timedOut: boolean } | undefined;
     if (response?.success === true) {
       wait = await this._waitForRuntimeRoles(instanceId, { noRuntime: true }, timeout);

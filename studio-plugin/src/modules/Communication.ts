@@ -69,6 +69,7 @@ const routeMap: Record<string, Handler> = {
 
 	"/api/start-playtest": TestHandlers.startPlaytest,
 	"/api/stop-playtest": TestHandlers.stopPlaytest,
+	"/api/playtest-state": TestHandlers.getPlaytestState,
 	"/api/multiplayer-test-start": TestHandlers.multiplayerTestStart,
 	"/api/multiplayer-test-state": TestHandlers.multiplayerTestState,
 	"/api/multiplayer-test-add-players": TestHandlers.multiplayerTestAddPlayers,

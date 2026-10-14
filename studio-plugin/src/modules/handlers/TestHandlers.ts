@@ -89,23 +89,21 @@ function startPlaytest(requestData: Record<string, unknown>) {
 		};
 	}
 
-	// Self-heal: if testRunning is stuck true but Studio reports no active
-	// playtest, the previous start_playtest's task.spawn was orphaned
-	// (plugin reload mid-test, Studio entered some inconsistent state, etc).
-	// Reset it so subsequent starts don't hit a false "already running".
-	if (testRunning && !RunService.IsRunning()) {
-		testRunning = false;
-		// Runtime eval bridges are created by the play server/client plugin
-		// peers and disappear with the play DataModels.
-	}
-
+	// The edit VM reports IsRunning=false even while Execute* is pending.
+	// Only the owning coroutine may release admission; resetting from IsRunning
+	// can overlap native starts and let an older completion unlock a newer test.
 	if (testRunning) {
-		return { error: "A test is already running" };
+		return { success: false, error: "A playtest execution is still pending.", playtestTaskPending: true };
 	}
 
 	testRunning = true;
-	const preparedTest = PluginSession.prepareSoloTest();
+	const [preparedOk, preparedTest] = pcall(() => PluginSession.prepareSoloTest());
+	if (!preparedOk) {
+		testRunning = false;
+		return { success: false, error: "Could not prepare the playtest.", detail: tostring(preparedTest) };
+	}
 
+	let executionError: string | undefined;
 	task.spawn(() => {
 		const [ok, result] = pcall(() => {
 			if (mode === "play") {
@@ -113,14 +111,22 @@ function startPlaytest(requestData: Record<string, unknown>) {
 			}
 			return StudioTestService.ExecuteRunModeAsync(preparedTest.testArgs);
 		});
-		PluginSession.finishTest(preparedTest.token);
+		const [cleanupOk, cleanupError] = pcall(() => PluginSession.finishTest(preparedTest.token));
+		if (!cleanupOk) warn(`[robloxstudio-mcp] Playtest cleanup failed: ${tostring(cleanupError)}`);
 
 		if (!ok) {
+			executionError = tostring(result);
 			warn(`[robloxstudio-mcp] Playtest ended with error: ${result}`);
 		}
 
 		testRunning = false;
 	});
+
+	// task.spawn enters immediately. Native errors raised before its first yield
+	// must not be acknowledged as a successful start and become readiness timeouts.
+	if (executionError !== undefined) {
+		return { success: false, error: "Studio could not start the playtest.", detail: executionError };
+	}
 
 	const response: Record<string, unknown> = {
 		success: true,
@@ -128,6 +134,10 @@ function startPlaytest(requestData: Record<string, unknown>) {
 	};
 
 	return response;
+}
+
+function getPlaytestState(_requestData: Record<string, unknown>) {
+	return { editModeReady: StudioTestService.EditModeActive, playtestTaskPending: testRunning };
 }
 
 function stopPlaytest(_requestData: Record<string, unknown>) {
@@ -190,6 +200,8 @@ function stopPlaytest(_requestData: Record<string, unknown>) {
 			error: "Playtest teardown did not complete.",
 			message: "Stop signal was accepted, but Studio teardown did not settle before timeout.",
 			stopSignalAccepted: true,
+			// The server may keep observing readiness without sending EndTest again.
+			teardownPending: true,
 			editModeReady,
 			playtestTaskPending: testRunning,
 			timedOut: true,
@@ -366,6 +378,7 @@ function multiplayerTestEnd(requestData: Record<string, unknown>) {
 export = {
 	startPlaytest,
 	stopPlaytest,
+	getPlaytestState,
 	multiplayerTestStart,
 	multiplayerTestState,
 	multiplayerTestAddPlayers,

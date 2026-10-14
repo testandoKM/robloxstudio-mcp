@@ -17,7 +17,9 @@ A versao `3.2.2-fork.1` prepara registro direto por WebSocket e limita chamadas
 nativas pendentes. Abertura do canal, consulta e reconexao passaram em uma nova
 janela da VFX TEST. Um ensaio dirigido de Play/Stop tambem passou nessa janela,
 com Play manual e o transporte do fork temporario em memoria, sem conta Windows
-adicional. O gate automatico do plugin completo continua pendente; o artefato
+adicional. A continuacao corrigiu o controle de sessao e validou dois ciclos
+automaticos consecutivos com os modulos reais de Play/Stop, tambem temporarios.
+O gate automatico do plugin completo continua pendente; o artefato
 permanece separado da instalacao de uso diario.
 
 ```powershell

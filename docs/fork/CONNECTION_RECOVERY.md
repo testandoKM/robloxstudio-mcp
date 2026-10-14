@@ -2,7 +2,8 @@
 
 Data: 2026-10-14. Branch: `codex/connection-investigation`.
 Versao preparada: `3.2.2-fork.1`. Estado: **canal, reconexao e Play/Stop dirigido
-validados na VFX TEST; gates do plugin completo pendentes; instalacao principal preservada**.
+validados na VFX TEST, incluindo dois ciclos automaticos dos controles;
+gates do plugin completo pendentes; instalacao principal preservada**.
 
 ## Escopo autorizado
 
@@ -16,6 +17,99 @@ adicional e sem instalar o fork. A conta separada continua sendo requisito do
 executor automatico completo, nao desse ensaio manual de componente. Usar
 somente fontes temporarios e servidor loopback isolado; nao alterar o perfil
 do Windows nem fingir que o gate automatico passou.
+
+`DECISAO` - 2026-10-14: o usuario autorizou a continuacao para corrigir e testar
+o Play automatico do fork na mesma VFX TEST, sem conta adicional e sem alterar
+a instalacao. Essa autorizacao inclui o ensaio de componentes descrito abaixo;
+nao amplia o gate integral nem permite instalar o artefato.
+
+## Controle automatico de Play/Stop
+
+`CONFIRMADO` no codigo e em regressao reproduzida: o inicio usava
+`!RunService.IsRunning()` para zerar `testRunning`. Na VM Edit isso nao comprova
+que `ExecutePlayModeAsync` terminou. Uma segunda chamada podia ser aceita com
+a coroutine anterior pendente; a conclusao antiga tambem podia liberar o
+controle da chamada nova. Os cinco novos casos de regressao falharam antes da
+correcao: sobreposicao, erro de preparacao, erro de limpeza e erro nativo
+imediato nos modos Play/Run.
+
+`CONFIRMADO` no Studio: prontidao de Edit, retorno da coroutine e desaparecimento
+das VMs de runtime ocorrem em momentos diferentes. O fixture observou inclusive
+`EditModeActive=true` junto de `playtestTaskPending=true`. Nao foi usada a
+aparencia do viewport nem `RunService:IsEdit()` para liberar o proximo inicio.
+
+Mudancas:
+
+- A chamada que iniciou o teste conserva o controle ate terminar; consultas
+  de estado nao zeram esse controle. Falhas de preparacao/limpeza sao tratadas
+  sem deixa-lo preso. Erros nativos imediatos retornam falha com o motivo.
+- O endpoint interno somente leitura `/api/playtest-state` informa
+  `editModeReady` e `playtestTaskPending`.
+- Depois de um Stop aceito, se a espera curta do plugin ainda encontrar
+  encerramento pendente, ele sinaliza `teardownPending`. O servidor acompanha
+  esse estado sem reenviar Stop/EndTest. So confirma sucesso quando a execucao
+  terminou, o motor liberou Edit e os peers de runtime desapareceram.
+- `solo_playtest` preserva seu contrato e passa a ter prazo padrao de Stop de
+  120 segundos, incluindo o pedido inicial na observacao de encerramento.
+  O usuario pode informar outro prazo. Plugins anteriores continuam no caminho
+  existente; uma falha real de EndTest nao e convertida em sucesso.
+
+`CONFIRMADO`: `local/vfx-automatic-play-1c8ec5999c8c.json` terminou com codigo
+zero, `completed=true` e `passed=true`. Dois ciclos consecutivos iniciaram Play
+pelos `TestHandlers` compilados do fork, confirmaram Server/Client reais e
+encerraram pelo `StopPlayMonitor` real, usando settings nativos com prefixo
+exclusivo do teste. Ambos recusaram uma chamada de inicio sobreposta e
+terminaram com contador pendente zero e prontidao nativa verdadeira. O segundo
+Play iniciou somente depois da conclusao do primeiro Stop.
+
+As observacoes de Stop duraram 113376 ms e 39172 ms, incluindo a ponte MCP e o
+tempo de entrega do controlador; **nao medem somente o motor Roblox**. A
+execucao anterior `feeec853ed3d` comprovou um primeiro ciclo, mas excedeu o prazo
+menor no segundo; nao e uma execucao integral aprovada. O desligamento do PC
+interrompeu `a2acf97100a3`, tambem sem aprovacao integral.
+
+O fixture final foi removido, seus dois settings apagados, HTTP permaneceu
+`false`, Workspace manteve os mesmos nomes/classes e a auditoria final nao
+encontrou logs com o nome dos fixtures. Hashes do plugin e servidor instalados
+antes/depois permaneceram iguais aos da instalacao 3.2.0. Nenhuma conta,
+instalacao, publicacao, save do place ou push foi realizado.
+
+Limites: sao os modulos reais `TestHandlers`, `StopPlayMonitor` e `PeerRole`,
+mais o servidor de controle de Stop do fork. Metadados/topologia de
+`PluginSession` e o transporte do controlador sao adaptadores de teste. Este
+ensaio nao carrega a UI nem o plugin completo, e nao retesta WebSockets; a
+abertura/reconexao e o hook de transporte tem as evidencias separadas abaixo.
+A origem da demora nativa de encerramento continua sem atribuicao definitiva.
+
+`CONFIRMADO`: 49 casos pertinentes passaram em execucoes focadas: 17 do
+controle Luau compilado, 13 do monitor de Stop, 3 da observacao do servidor e
+16 dos contratos existentes de start/stop/solo. Build dos tres pacotes e build
+do plugin somente como artefato passaram. Lint: zero erros e os 40 avisos
+preexistentes de `any`. O artefato separado
+`studio-plugin/MCPPlugin.rbxmx` tem SHA-256
+`e8bd2a9a3dac17f6b925b3c89fcf2575bdeb8f2303a4ce457a0d234044a741b5`.
+
+Para repetir, gerar os builds sem instalar e executar
+`node scripts/fork/vfx-playtest-lab.mjs --vfx-directed`. O controlador deve:
+
+1. Conferir o alvo exato VFX e consumir cada `callId` uma unica vez de
+   `local/vfx-playtest-control-request.json`; responder no arquivo irmao
+   `vfx-playtest-control-reply.json` com `{callId,ok,result,error}`. `ok` indica
+   execucao do comando, nao o campo `success` do resultado de um handler.
+2. Em `execute`, usar Chrrxs Edit para os controles e consultas; `sourceWrite`
+   precisa do MCP oficial com permissao de Source. Em `wait-runtime`, observar
+   Server/Client disponiveis e confirmar identidade e RunService nas VMs reais.
+   Nunca chamar o Play do controlador oficial para iniciar estes ciclos.
+3. Em `confirm-edit`/`cleanup-play`, exigir Edit nativo e coroutine concluida.
+   Se Stop ja foi pedido, apenas observar; nao repetir EndTest. Uma eventual
+   limpeza de runtime iniciada antes de Stop deve reconciliar sua conclusao.
+4. Nao destruir modulos temporarios enquanto uma chamada nativa estiver
+   pendente. O helper conserva o fixture nesse caso e registra `cleanupPending`.
+   Depois de queda do PC/processo, conferir a sessao atual, os checkpoints e
+   os settings exclusivos antes de retomar; nao repetir o pedido antigo.
+5. Encerrar a ponte em `complete` ou no termino do processo e conferir
+   `completed`, `passed`, limpeza e hashes. Checkpoints incompletos nao sao
+   resultados aprovados. O helper nao habilita HTTP nem instala arquivos.
 
 O [relatorio inicial](CONNECTION_INVESTIGATION.md) registra a instalacao 3.2.0
 sem WebSocket ativo e a comparacao com a release original 3.2.1. Suas conclusoes

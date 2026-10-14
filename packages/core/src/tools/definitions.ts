@@ -592,7 +592,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
         timeout: {
           type: 'number',
-          description: 'Wait in seconds; start defaults to 60 and stop to 15.'
+          description: 'Wait in seconds; start defaults to 60 and stop to 120. Stop waits for native edit readiness and pending execution to finish.'
         },
         instance_id: {
           type: 'string',

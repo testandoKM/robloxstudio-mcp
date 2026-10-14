@@ -91,6 +91,21 @@ Play command without reconciling the actual state. See the controller protocol,
 successful manual run, and remaining API readiness limitation in
 [the fork investigation](../docs/fork/CONNECTION_RECOVERY.md).
 
+The user also authorized automatic Play/Stop component validation in that same
+VFX TEST, without installing the fork or creating another Windows account:
+
+```bash
+node scripts/fork/vfx-playtest-lab.mjs --vfx-directed
+```
+
+This helper loads the production TestHandlers and StopPlayMonitor temporarily,
+uses native settings under unique test keys, and runs two consecutive Play/Stop
+cycles. The core stop observer waits for native Edit readiness and execution
+completion without repeating EndTest. Its MCP controller protocol and limits
+are documented in the investigation linked above. Keep a pending native call's
+fixture alive until it drains; never cancel/destroy it to force another start.
+The directed component test still does not satisfy the full plugin gate.
+
 When `MCP_INSTANCE_ID` is unset, the runner starts the built MCP server as the
 required primary on the configured port and gives it a random, run-scoped auth
 token. Through authenticated `POST /mcp/manage_instance` calls, it snapshots
