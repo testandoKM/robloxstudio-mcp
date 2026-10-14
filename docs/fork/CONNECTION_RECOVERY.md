@@ -1,14 +1,21 @@
 # Correcao experimental da abertura do canal
 
 Data: 2026-10-14. Branch: `codex/connection-investigation`.
-Versao preparada: `3.2.2-fork.1`. Estado: **canal e reconexao validados na VFX TEST;
-gates do plugin completo pendentes; instalacao principal preservada**.
+Versao preparada: `3.2.2-fork.1`. Estado: **canal, reconexao e Play/Stop dirigido
+validados na VFX TEST; gates do plugin completo pendentes; instalacao principal preservada**.
 
 ## Escopo autorizado
 
 `DECISAO`: corrigir no fork e testar em um Studio separado usando **VFX TEST**,
 `PlaceId=76624397270311`, `GameId=10764893534`, antes de substituir a instalacao
 atual. Catch & Clean, Script Sync, publicacao e push ficam fora desta etapa.
+
+`DECISAO` - 2026-10-14: por pedido explicito do usuario, executar tambem um
+ensaio dirigido de Play/Stop na propria VFX TEST aberta, sem conta Windows
+adicional e sem instalar o fork. A conta separada continua sendo requisito do
+executor automatico completo, nao desse ensaio manual de componente. Usar
+somente fontes temporarios e servidor loopback isolado; nao alterar o perfil
+do Windows nem fingir que o gate automatico passou.
 
 O [relatorio inicial](CONNECTION_INVESTIGATION.md) registra a instalacao 3.2.0
 sem WebSocket ativo e a comparacao com a release original 3.2.1. Suas conclusoes
@@ -150,6 +157,55 @@ Nenhuma configuracao de Windows foi criada por esta task. O teste de componente
 acima nao substitui esses gates nem comprova recuperacao de um limite nativo ja
 saturado.
 
+## Play/Stop dirigido sem outra conta Windows
+
+`CONFIRMADO`: o ensaio foi realizado na propria VFX TEST aberta, sem instalar
+arquivos e sem lancar outro Studio. O fixture carrega o mesmo transporte
+compilado na VM Edit e, durante Play, na VM Server. Confere a linha de
+`BindToClose` do entrypoint compilado e registra no servidor a mesma funcao
+de producao `StudioWebSocket.suspendForShutdown`.
+
+`CONFIRMADO`: a execucao conclusiva `vfx-play-stop-ef1892a81ab6.json` terminou
+com codigo zero. O usuario iniciou o Play pelo botao do Studio; o controlador
+oficial confirmou o place e o contexto Server, carregou o transporte do fork
+e encerrou a simulacao por `StudioTestService:EndTest`. O teste verificou:
+
+- Resposta do fork dentro do servidor real de Play, com `IsRunning=true` e
+  `IsServer=true`.
+- Desregistro do peer do servidor pela rotina de encerramento, antes da
+  expiracao de 30 segundos. O intervalo observado foi 6169 ms desde o pedido
+  ao controlador; inclui a entrega do comando, nao mede somente o callback.
+- Retorno a Edit, `RunService:IsEdit()=true`, `IsRunning()=false` e nova
+  resposta do transporte do fork em Edit.
+- Fixture removido, HTTP restaurado a `false`, nenhum log associado ao nome
+  do fixture na auditoria final em Edit e os mesmos nomes/classes na raiz de
+  Workspace antes e depois.
+- Hash do plugin instalado inalterado.
+
+`HISTORICO`: a execucao `vfx-play-stop-26d09c9f4e52.json` tambem comprovou um
+ciclo com consulta em Play, desregistro e consulta em Edit, mas o pedido de
+segundo Play nao concluiu no controlador. A execucao inteira nao foi marcada
+como aprovada. Sua limpeza foi reconciliada e concluida separadamente.
+
+`CONFIRMADO`: o controle de Play/Stop pelo Chrrxs instalado falhou durante a
+preparacao: inicio sem confirmacao de runtime no prazo, e Stop sem
+reconhecimento. O controle oficial encerrou a simulacao, mas um novo inicio
+automatico retornou `Start play hasn't finished yet`. Houve uma transicao
+atrasada para Play; ela foi reconciliada e encerrada antes do ensaio manual.
+Nao foram feitas novas tentativas automaticas de inicio apos essa recusa.
+
+`CONFIRMADO`: apos o retorno visivel a Edit, `StudioTestService.EditModeActive`
+continuou `false`, embora `RunService:IsEdit()` fosse `true` e a API oficial
+aceitasse o DataModel Edit. Essa divergencia foi preservada nos resultados.
+O ensaio dirigido usa o estado de execucao e o desregistro observado; **nao
+afirma que a API automatica de testes ficou pronta**. Sua causa permanece
+aberta, sem alterar ou enfraquecer as verificacoes do codigo de producao.
+
+Limite: esse resultado valida o transporte e o hook real de encerramento em
+Play/Stop. Os adaptadores de metadados/handlers continuam restritos; nao foram
+carregados UI, roteamento de clientes, StopPlayMonitor e todos os demais
+modulos do plugin completo. O gate automatico integral permanece pendente.
+
 ## Impedimento anterior de abertura automatica
 
 `HISTORICO`: a tentativa unica de abrir outro Studio pelo lancador protegido foi recusada
@@ -178,8 +234,12 @@ conferir/finalizar a instalacao pelo procedimento proprio do repositorio.
    controlador MCP ativo. O script publica comandos Luau em
    `local/vfx-control-request.json`. O controlador deve validar `runId` e o
    alvo VFX, executar uma vez cada `callId` no MCP oficial em Edit e gravar
-   `{callId,ok,result,error}` em `local/vfx-control-reply.json`. Uma resposta
-   precisa chegar em ate 60 segundos; em timeout, reconciliar antes de repetir.
+   `{callId,ok,result,error}` em `local/vfx-control-reply.json`. Requisicoes de
+   execucao incluem `dataModel` (Edit ou Server). Uma resposta de execucao
+   precisa chegar em ate 60 segundos; controles Play/Stop tem 120 segundos.
+   Em timeout, reconciliar antes de repetir. Usar filesystem pelo `node_repl`
+   para essa ponte; se usar terminal, aguardar a conclusao de qualquer sessao
+   retornada antes de interpretar a saida. Saida ainda vazia nao e JSON vazio.
 4. O fixture usa o transporte compilado atual em um modulo temporario sob o
    PluginDebugService, metadados de sessao de teste e um servidor loopback em
    porta efemera. A unica ferramenta de fixture e `get_place_info`. Ele deve
@@ -191,7 +251,16 @@ conferir/finalizar a instalacao pelo procedimento proprio do repositorio.
    `e037d99bcd31fb140fbc0bbfbe4d606bd47bd5857bef242f93f7f5d61e9519bc`.
    Ele deve demonstrar o bloqueio HTTP controlado. Executar somente uma
    instancia do fixture por vez e conferir a limpeza apos cada teste.
-6. Depois do teste de componente, usar o perfil isolado para o plugin completo
+6. Para o ensaio dirigido autorizado, acrescentar `--play-cycles 1` (maximo 3).
+   O controlador recebe `kind=play`, `action=start/stop`, e `kind=state` para
+   reconciliacao. Antes do Play manual, carregar o fixture Edit e aguardar o
+   pedido `start`; so entao orientar o usuario a apertar Play. Confirmar a VM
+   Server antes de reconhecer o inicio. No Stop, usar um controle disponivel
+   ou `StudioTestService:EndTest` da VM Server, confirmar encerramento e nao
+   repetir operacoes com resultado desconhecido. Responder `controller` com
+   a origem da acao. O pacote `kind=complete` ou o termino do processo encerra
+   a ponte, inclusive em falha; nao continuar consumindo um pedido antigo.
+7. Depois do teste de componente, usar o perfil isolado para o plugin completo
    na VFX TEST e executar os gates pertinentes de conexao/reconexao e Play/Stop.
    Nao substituir a instalacao principal ate concluir essa verificacao.
 

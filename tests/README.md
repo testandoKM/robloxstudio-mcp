@@ -71,6 +71,26 @@ The runner stops at the first failure and reports remaining checks as not run.
 | Play-server shutdown, peer unregistration, or plugin HTTP requests | `npm run test:studio:shutdown-http-slots` |
 | Release | `npm run test:e2e:full`, plus affected standalone payload/WebSocket probes above |
 
+### Directed fork transport probe in the existing VFX TEST
+
+The user authorized a directed Play/Stop probe in the already-open VFX TEST
+without another Windows account or replacing the installed plugin. This
+component probe uses its own loopback bridge and temporary modules; it does
+not run or satisfy the full plugin feature gate above.
+
+```bash
+node scripts/fork/vfx-transport-lab.mjs --official-control --play-cycles 1
+```
+
+This requires an active MCP controller and the exact VFX place/game identity
+checked by the helper. Prepare the Edit fixture before asking the user to press
+Play. Load the compiled transport in the real play-server VM and exercise the
+production shutdown hook. Verify server unregistration and another Edit reply,
+then remove the fixture and restore HTTP settings. Do not retry a failed native
+Play command without reconciling the actual state. See the controller protocol,
+successful manual run, and remaining API readiness limitation in
+[the fork investigation](../docs/fork/CONNECTION_RECOVERY.md).
+
 When `MCP_INSTANCE_ID` is unset, the runner starts the built MCP server as the
 required primary on the configured port and gives it a random, run-scoped auth
 token. Through authenticated `POST /mcp/manage_instance` calls, it snapshots
