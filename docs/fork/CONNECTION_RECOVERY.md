@@ -3,7 +3,12 @@
 Data: 2026-10-14. Branch: `codex/connection-investigation`.
 Versao preparada: `3.2.2-fork.1`. Estado: **canal, reconexao e Play/Stop dirigido
 validados na VFX TEST, incluindo dois ciclos automaticos dos controles;
-gates do plugin completo pendentes; instalacao principal preservada**.
+validacao funcional do pacote completo em memoria tambem aprovada;
+instalacao principal preservada**.
+
+A continuacao do pacote inteiro, seus hashes, cobertura e limites estao em
+[validacao funcional do pacote completo](FULL_PACKAGE_VALIDATION.md). Os gates
+de instalacao/auto-load por arquivo e release continuam separados.
 
 ## Escopo autorizado
 

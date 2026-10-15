@@ -19,8 +19,11 @@ janela da VFX TEST. Um ensaio dirigido de Play/Stop tambem passou nessa janela,
 com Play manual e o transporte do fork temporario em memoria, sem conta Windows
 adicional. A continuacao corrigiu o controle de sessao e validou dois ciclos
 automaticos consecutivos com os modulos reais de Play/Stop, tambem temporarios.
-O gate automatico do plugin completo continua pendente; o artefato
-permanece separado da instalacao de uso diario.
+A [validacao funcional do pacote completo](docs/fork/FULL_PACKAGE_VALIDATION.md)
+tambem passou: UI, CLI MCP, broker/execucao Server e Client, profiler,
+reconexao e dois ciclos de Play/Stop, com o pacote temporario em memoria.
+Instalacao/auto-load por arquivo e gates integrais de release permanecem
+separados; o artefato nao substituiu a instalacao de uso diario.
 
 ```powershell
 node scripts/fork/connection-snapshot.mjs --samples 3 --interval-ms 12000 --probe --output local/connection-snapshot.json

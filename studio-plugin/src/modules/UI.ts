@@ -1,6 +1,7 @@
 import { TweenService } from "@rbxts/services";
 import State from "./State";
 import ServerUrlSettings from "./ServerUrlSettings";
+import PluginScope from "./PluginScope";
 
 interface UIElements {
 	screenGui: DockWidgetPluginGui;
@@ -134,7 +135,7 @@ function init(pluginRef: Plugin) {
 	const CURRENT_VERSION = State.CURRENT_VERSION;
 
 	const screenGui = pluginRef.CreateDockWidgetPluginGuiAsync(
-		"MCPServerInterface",
+		PluginScope.name("MCPServerInterface"),
 		// 3rd arg (initialEnabledShouldOverrideRestore=true) forces the dock closed
 		// at every Studio launch. User can still open via the toolbar button.
 		new DockWidgetPluginGuiInfo(Enum.InitialDockState.Float, false, true, 300, 260, 260, 200),

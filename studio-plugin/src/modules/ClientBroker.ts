@@ -15,6 +15,7 @@ import HttpDiagnostics from "./HttpDiagnostics";
 import PluginSession from "./PluginSession";
 import TopologyId from "./TopologyId";
 import PeerRole from "./PeerRole";
+import PluginScope from "./PluginScope";
 import type { StudioRequestContext } from "../types";
 
 interface StudioTestServiceMultiplayer extends StudioTestService {
@@ -32,7 +33,7 @@ const StudioTestService = game.GetService("StudioTestService") as StudioTestServ
 
 const DEFAULT_MCP_URL = "http://localhost:58741";
 let mcpUrl = DEFAULT_MCP_URL;
-const BROKER_NAME = "__MCPClientBroker";
+const BROKER_NAME = PluginScope.name("__MCPClientBroker");
 const BROKER_OWNER_ATTRIBUTE = "__MCPBrokerOwner";
 const CLIENT_IDENTITY_KIND = "identity";
 // A normal capture needs at most 15s sampling + 5s waiting for profiler data.

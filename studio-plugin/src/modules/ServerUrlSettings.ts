@@ -1,11 +1,12 @@
 import PluginSession from "./PluginSession";
+import type { SettingsStore } from "./PlaytestTickets";
 
 const SETTING_KEY_PREFIX = "MCP_LAST_SUCCESSFUL_SERVER_URL_";
 const GLOBAL_SETTING_KEY = "MCP_LAST_SUCCESSFUL_SERVER_URL_GLOBAL_V1";
 
-let pluginRef: Plugin | undefined;
+let pluginRef: SettingsStore | undefined;
 
-function init(p: Plugin): void {
+function init(p: SettingsStore): void {
 	pluginRef = p;
 }
 

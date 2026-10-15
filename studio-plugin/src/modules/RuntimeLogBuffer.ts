@@ -28,6 +28,7 @@ let totalBytes = 0;
 let totalDropped = 0;
 let nextSeq = 1;
 let installed = false;
+let outputConnection: RBXScriptConnection | undefined;
 
 function levelTag(t: Enum.MessageType): LogLevel {
 	if (t === Enum.MessageType.MessageWarning) return "WARN";
@@ -135,7 +136,7 @@ function install(): void {
 	// Seed from per-DataModel LogHistory so get_runtime_logs can still see them;
 	// edit history is bounded to the current Studio process above.
 	seedRuntimeHistory();
-	LogService.MessageOut.Connect((msg, t, context?: Record<string, unknown>) => {
+	outputConnection = LogService.MessageOut.Connect((msg, t, context?: Record<string, unknown>) => {
 		pushEntry(msg, t, undefined, context);
 	});
 }
@@ -191,5 +192,6 @@ function query(opts: QueryOptions): QueryResult {
 
 export = {
 	install,
+	uninstall: () => { outputConnection?.Disconnect(); outputConnection = undefined; installed = false; },
 	query,
 };

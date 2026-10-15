@@ -1,6 +1,7 @@
 import { HttpService, ReplicatedStorage, RunService, ServerStorage } from "@rbxts/services";
 import State from "./State";
 import PeerRole from "./PeerRole";
+import PluginScope from "./PluginScope";
 import TopologyId from "./TopologyId";
 import * as PlaytestTickets from "./PlaytestTickets";
 import type { PlaytestTicket, SettingsStore } from "./PlaytestTickets";
@@ -25,7 +26,7 @@ const LEGACY_TOPOLOGY_ATTRIBUTES = [
 	TOPOLOGY_GROUP_ID_ATTRIBUTE,
 	TOPOLOGY_TOKEN_ATTRIBUTE,
 ];
-const SESSION_IDENTITY_NAME = "__MCPSessionIdentity";
+const SESSION_IDENTITY_NAME = PluginScope.name("__MCPSessionIdentity");
 // JSON session state lives in StringValue children of the CoreGui identity
 // value: CoreGui survives plugin reloads but is never saved with the place or
 // copied into playtest DataModels. Not attributes: with NextGenerationReplication,
@@ -34,7 +35,7 @@ const PLAY_RECORD_NAME = "PlayRecord";
 const RUNTIME_TOPOLOGY_NAME = "RuntimeTopology";
 // MCP-started solo and Run playtests carry their topology in StudioTestService
 // test args, which never touch the DataModel.
-const TEST_ARGS_TOPOLOGY_KEY = "__mcpTopology";
+const TEST_ARGS_TOPOLOGY_KEY = PluginScope.name("__mcpTopology");
 
 const TICKET_HEARTBEAT_SEC = 1;
 const UNCLAIMED_TICKET_LIFETIME_MS = 120_000;
@@ -102,6 +103,7 @@ let legacyPlaceKey: string | undefined;
 let runtimeTopology: RuntimeTopology | undefined;
 let runtimeResolutionStarted = false;
 let heartbeatTicketId: string | undefined;
+let editModeConnection: RBXScriptConnection | undefined;
 
 let cachedPlaceName: string | undefined;
 let cachedPlaceNamePlaceId: number | undefined;
@@ -518,12 +520,13 @@ function init(store: SettingsStore, options: SessionOptions): void {
 		runtimeTopology = readRememberedRuntimeTopology();
 		return;
 	}
-	removeSavedSessionState();
-	StudioTestService.GetPropertyChangedSignal("EditModeActive").Connect(onEditModeChanged);
+	if (!PluginScope.isolated) removeSavedSessionState();
+	editModeConnection = StudioTestService.GetPropertyChangedSignal("EditModeActive").Connect(onEditModeChanged);
 	resumePlayRecord();
 }
 
 export = {
+	dispose: () => { editModeConnection?.Disconnect(); editModeConnection = undefined; heartbeatTicketId = undefined; },
 	peerId,
 	init,
 	resolveRuntimeTopology,

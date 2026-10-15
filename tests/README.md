@@ -106,6 +106,28 @@ are documented in the investigation linked above. Keep a pending native call's
 fixture alive until it drains; never cancel/destroy it to force another start.
 The directed component test still does not satisfy the full plugin gate.
 
+### Directed complete-package validation without installation
+
+The user explicitly authorized testing the complete package in the existing
+VFX TEST, without another Windows account or replacing the installed plugin:
+
+```bash
+node scripts/fork/vfx-package-lab.mjs --vfx-directed
+```
+
+The helper starts the actual built CLI on an isolated authenticated loopback
+port, verifies all packaged Sources, and bootstraps the complete plugin under
+native temporary Plugin objects in Edit, Server and Client. MCP calls exercise
+edit tooling, replay safety, server restart/reconnect, the real client broker,
+runtime eval, MicroProfiler and two automatic Play/Stop cycles. Root attribute
+`MCPIsolationScope` separates state/settings/handoff from the installed copy;
+absence preserves the ordinary plugin identifiers and settings store.
+
+This is a complete-package functional test in memory, not the native installed
+file loader or the full release suite. Do not bypass the profile/installer
+guards in existing runners. Controller details, verified hashes, cleanup and
+coverage are recorded in [the full-package report](../docs/fork/FULL_PACKAGE_VALIDATION.md).
+
 When `MCP_INSTANCE_ID` is unset, the runner starts the built MCP server as the
 required primary on the configured port and gives it a random, run-scoped auth
 token. Through authenticated `POST /mcp/manage_instance` calls, it snapshots
