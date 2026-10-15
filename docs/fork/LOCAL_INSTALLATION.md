@@ -99,6 +99,37 @@ anteriores. Nao houve bootstrap/substituicao de Source, salvamento/publicacao
 do place ou uso do lab para os testes. O hash do plugin instalado permaneceu
 igual depois da reinicializacao automatica do CLI.
 
+## Nome publico KMCP
+
+`DECISAO` - 2026-10-15: o usuario escolheu KMCP como nome publico. O artefato
+foi recompilado com esse nome na barra, no botao, no titulo da janela e no
+cabecalho. A variante de leitura usa KMCP Inspector. A interface identifica
+testandoKM e mantem o credito ao Chrrxs; LICENSE nao foi alterado.
+
+`CONFIRMADO`: antes da troca, os artefatos anterior, instalado e bundled
+foram preservados em `local/name-backup-2026-10-15T03-04-37.214Z/`.
+A copia bundled do CLI instalado e o arquivo na pasta Plugins foram
+atualizados, para que o auto-install tambem preserve o novo nome.
+
+| Artefato KMCP | SHA-256 |
+| --- | --- |
+| Modelo sem configuracao de porta | `5b4878d2f4e576fe4ca657eb7cbd4e5de7464a30787e89819e38ea171387f918` |
+| Plugin instalado para 58742 | `93c98261943ccd98ddb8c7761e0cf133a74c6e4e22507768ff8e89cd7877e65c` |
+
+A versao continua `3.2.2-fork.1`. Dos 45 fontes empacotados, somente o
+entrypoint (textos da toolbar) e UI mudaram; os demais conferem com a copia
+anterior. O hash do CLI permanece igual ao da instalacao original acima.
+Os nomes tecnicos MCPPlugin.rbxmx, pacote npm, widget, settings e protocolo
+foram preservados por compatibilidade.
+
+Compilacao roblox-ts, geracao de ambos os modelos, verificacoes de conteudo
+dos pacotes e flags/caminhos de instalacao dos CLIs passaram. Depois da
+troca, consultas get_place_info do lab e da VFX TEST responderam normalmente.
+Nenhum script ou mapa do jogo foi editado e nenhuma janela foi reiniciada.
+O nome novo no Studio depende da proxima carga do plugin; a UI nova ainda
+nao foi conferida visualmente em uma janela reaberta. Evidencia detalhada
+local em `local/kmcp-name-validation.json`.
+
 ## Ativacao e limites
 
 O arquivo instalado e a configuracao de novas conexoes apontam para o fork.

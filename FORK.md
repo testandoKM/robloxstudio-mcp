@@ -1,4 +1,10 @@
-# Fork Roblox Studio MCP
+# KMCP - fork do Roblox Studio MCP
+
+`DECISAO` - 2026-10-15: o nome publico do plugin e **KMCP**, escolhido pelo usuario.
+A barra, o botao e o painel usam KMCP (KMCP Inspector na variante de leitura).
+Os identificadores de pacote, arquivo, widget e protocolo permanecem iguais
+para preservar instalacao, configuracoes e conexoes existentes. A origem
+Chrrxs permanece creditada na interface, na documentacao e na licenca.
 
 `DECISAO` - 2026-10-14: criar um projeto separado para investigar e melhorar a estabilidade do Chrrxs MCP, comecando pela comparacao da instalacao 3.2.0 com a versao atual e pelo travamento da conexao.
 
