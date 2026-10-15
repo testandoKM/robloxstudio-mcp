@@ -22,8 +22,12 @@ automaticos consecutivos com os modulos reais de Play/Stop, tambem temporarios.
 A [validacao funcional do pacote completo](docs/fork/FULL_PACKAGE_VALIDATION.md)
 tambem passou: UI, CLI MCP, broker/execucao Server e Client, profiler,
 reconexao e dois ciclos de Play/Stop, com o pacote temporario em memoria.
-Instalacao/auto-load por arquivo e gates integrais de release permanecem
-separados; o artefato nao substituiu a instalacao de uso diario.
+A [instalacao local autorizada](docs/fork/LOCAL_INSTALLATION.md) preservou a
+3.2.0 em backup e instalou o fork. Carregamento nativo do arquivo em Edit,
+Server e Client, dois Play/Stop automaticos e recuperacao da conexao passaram
+na VFX TEST reaberta, usando a porta fixa 58742. O lab aberto permaneceu na
+conexao antiga durante o teste; seu uso com o fork nao foi validado aqui.
+Os gates integrais de release continuam separados.
 
 ```powershell
 node scripts/fork/connection-snapshot.mjs --samples 3 --interval-ms 12000 --probe --output local/connection-snapshot.json

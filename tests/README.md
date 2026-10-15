@@ -128,6 +128,20 @@ file loader or the full release suite. Do not bypass the profile/installer
 guards in existing runners. Controller details, verified hashes, cleanup and
 coverage are recorded in [the full-package report](../docs/fork/FULL_PACKAGE_VALIDATION.md).
 
+### Directed installed-file validation in VFX TEST
+
+After the in-memory validation, the user explicitly authorized backing up the
+current installation and installing the fork without a second Windows account.
+The installed CLI and native file loader were exercised in a user-reopened VFX
+TEST: default namespace, all 45 packaged Sources in Edit/Server/Client, real
+runtime eval, two automatic Play/Stop cycles and connection recovery. No runtime
+bootstrap was used. The principal project remained outside the test.
+
+Backup, hashes, native results, Output findings and activation limits are in
+[the local installation report](../docs/fork/LOCAL_INSTALLATION.md). This directed
+installation check does not bypass or satisfy the dedicated-profile full release
+and managed lifecycle gates above.
+
 When `MCP_INSTANCE_ID` is unset, the runner starts the built MCP server as the
 required primary on the configured port and gives it a random, run-scoped auth
 token. Through authenticated `POST /mcp/manage_instance` calls, it snapshots
