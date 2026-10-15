@@ -26,7 +26,9 @@ A [instalacao local autorizada](docs/fork/LOCAL_INSTALLATION.md) preservou a
 3.2.0 em backup e instalou o fork. Carregamento nativo do arquivo em Edit,
 Server e Client, dois Play/Stop automaticos e recuperacao da conexao passaram
 na VFX TEST reaberta, usando a porta fixa 58742. O lab aberto permaneceu na
-conexao antiga durante o teste; seu uso com o fork nao foi validado aqui.
+conexao antiga durante aquele teste. Apos o usuario reiniciar o lab, o
+principal conectou ao fork; cinco consultas em 149 segundos passaram sem
+falhas, em Edit e somente leitura, sem alterar scripts/mapa ou iniciar Play.
 Os gates integrais de release continuam separados.
 
 ```powershell

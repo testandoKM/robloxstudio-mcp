@@ -102,12 +102,34 @@ igual depois da reinicializacao automatica do CLI.
 ## Ativacao e limites
 
 O arquivo instalado e a configuracao de novas conexoes apontam para o fork.
-A janela do lab e as conexoes antigas ja abertas permaneceram em 58741 com
-3.2.0 durante a validacao. Para usar o fork em uma janela antiga, reabra o
-Studio depois de preservar o trabalho aberto. Um cliente Codex ainda ligado
+`HISTORICO`: a janela do lab e as conexoes antigas ja abertas permaneceram em
+58741 com 3.2.0 durante a validacao da VFX. Para usar o fork em uma janela
+antiga, reabra o Studio depois de preservar o trabalho aberto. Um cliente Codex ainda ligado
 ao processo antigo precisa reiniciar somente a conexao robloxstudio; nao e
 necessario mudar a porta novamente. Nao encerrar indiscriminadamente os
 processos antigos, pois podem atender outras conversas.
+
+### Principal apos reiniciar o lab
+
+`CONFIRMADO` - 2026-10-14, horario local: depois de o usuario reiniciar o lab,
+o principal conectou como `instance:ly0-2q5`, peer Edit `peer:0ua-vls`, no
+servidor 58742. Plugin carregado e servidor anunciam `3.2.2-fork.1`.
+PlaceId=12945539369 e GameId=4528135208 foram conferidos junto do conteudo
+FishSystem, GameServer, Player_Base e Tropical_Island. Os hashes do plugin
+instalado e do CLI continuam iguais aos registrados acima.
+
+Cinco consultas temporizadas `get_place_info`, ao longo de 149 segundos,
+passaram sem falha: 194-233 ms, media de 206 ms. As consultas pelo conector
+MCP do Codex tambem responderam. Em todas as amostras havia transporte ativo,
+nenhuma requisicao pendente e o mesmo registro de conexao do principal.
+As consultas filtradas de Output nao encontraram avisos do MCP.
+
+A conferencia usou somente leitura, sem `require`, remotes ou bindables,
+sem editar scripts/mapa e sem iniciar Play ou retomar Script Sync. O lab
+permaneceu em Edit, com as mesmas 178 raizes de Workspace no inicio e no fim.
+Evidencia local: `local/main-fork-stability-2026-10-15T02-56-10.055Z.json`.
+Esse resultado confirma conectividade em Edit durante a amostragem; nao
+valida Play/Stop no principal nem garante estabilidade por tempo indefinido.
 
 O teste dirigido na VFX foi aprovado antes de usar o projeto principal.
 O ensaio dirigido nao substitui os gates integrais de release do perfil
