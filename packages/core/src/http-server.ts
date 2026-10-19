@@ -327,7 +327,28 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
   let mcpServerStartTime = 0;
   const proxyInstances = new Set<string>();
   const rejectedVersionPeers = new Set<string>();
-  const studioTransport = new WebSocketStudioTransport(bridge);
+  const studioTransport = new WebSocketStudioTransport(bridge, (owner, action, data) => {
+    const existing = typeof data.peerId === 'string' ? bridge.getPeerById(data.peerId) : undefined;
+    // The authenticated socket may refresh itself or manage its own clients.
+    // Never accept another transport's identity or evict its client.
+    if (typeof data.peerId !== 'string' || data.peerId === ''
+      || (existing && existing.transportPeerId !== owner)) {
+      return { success: false, error: 'peer_control_owner_mismatch' };
+    }
+    if (action === 'unregister') {
+      if (data.peerId === owner) return { success: false, error: 'peer_control_requires_client' };
+      if (existing) bridge.unregisterPeer(data.peerId);
+      return { success: true };
+    }
+    if (data.transportPeerId !== owner) return { success: false, error: 'peer_control_owner_mismatch' };
+    let reply: Record<string, unknown> = { success: false };
+    const writer: StudioReadyWriter = {
+      status() { return writer; },
+      json(body) { reply = body as Record<string, unknown>; },
+    };
+    handleReady({ body: data }, writer);
+    return reply;
+  });
   const transportTokens = new Map<string, string>();
   const boundServers = new Set<http.Server>();
   const webSocketServer = new WebSocketServer({

@@ -44,6 +44,7 @@ interface StudioWebSocketOptions {
 }
 
 type DecodedEvent = StudioRequestEvent | StudioCancelEvent | StudioStatusEvent | StudioAckEvent
+  | { kind: "peer-control-result"; requestId: string; result: Record<string, unknown> }
 	| { kind: "heartbeat"; timestamp: number };
 
 interface RequestProgress {
@@ -116,6 +117,33 @@ const terminalResponseOrder: Array<TerminalResponse | undefined> = [];
 let terminalHead = 0;
 let terminalCount = 0;
 const readyFailureLogKeys = new Set<string>();
+let nextPeerControlId = 0;
+const peerControls = new Map<string, { generation: number; callback: (result: Record<string, unknown>) => void; timer?: thread }>();
+
+function finishPeerControl(requestId: string, result: Record<string, unknown>): void {
+	const pending = peerControls.get(requestId);
+	if (pending === undefined) return;
+	peerControls.delete(requestId);
+	cancelThread(pending.timer);
+	task.spawn(() => invokeCallback("Peer registration", () => pending.callback(result)));
+}
+
+// Registration is idempotent metadata, separate from command execution and its
+// unknown-outcome/replay contract. Never use Studio's shared HTTP slots here.
+function requestPeerControl(action: "register" | "unregister", data: Record<string, unknown>, callback: (result: Record<string, unknown>) => void): boolean {
+	const client = socketClient;
+	if (!active || !socketOpen || client === undefined || peerControls.size() >= 128) return false;
+	const requestId = `pc:${++nextPeerControlId}`;
+	const pending = { generation, callback, timer: undefined as thread | undefined };
+	peerControls.set(requestId, pending);
+	pending.timer = task.delay(5, () => {
+		pending.timer = undefined;
+		finishPeerControl(requestId, { success: false, error: "peer_control_timeout" });
+	});
+	const [ok] = pcall(() => client.Send(HttpService.JSONEncode({ kind: "peer-control", requestId, action, data })));
+	if (!ok) finishPeerControl(requestId, { success: false, error: "peer_control_send_failed" });
+	return true;
+}
 
 function validRequestId(value: unknown): value is string {
 	return typeIs(value, "string") && value.size() > 0 && value.size() <= MAX_REQUEST_ID_BYTES;
@@ -141,6 +169,10 @@ function decodeMessage(payload: string): DecodedEvent | undefined {
 		};
 	}
 	if (!validRequestId(envelope.requestId)) return undefined;
+	if (envelope.kind === "peer-control-result") {
+		if (!typeIs(envelope.result, "table")) return undefined;
+		return { kind: "peer-control-result", requestId: envelope.requestId, result: envelope.result as Record<string, unknown> };
+	}
 	if (envelope.kind === "ack") {
 		if (envelope.disposition !== "accepted" && envelope.disposition !== "already_settled" && envelope.disposition !== "unknown") return undefined;
 		return { kind: "ack", requestId: envelope.requestId, disposition: envelope.disposition };
@@ -453,6 +485,7 @@ function finishWork(work: TransportWork): void {
 }
 
 function cancelTransportWork(): void {
+	for (const [requestId] of peerControls) finishPeerControl(requestId, { success: false, error: "peer_control_disconnected" });
 	if (connectionWork !== undefined) finishWork(connectionWork);
 	if (refreshWork !== undefined) {
 		refreshRequested = true;
@@ -696,9 +729,9 @@ function connect(expectedGeneration: number): void {
 						return;
 					}
 					cachedReady = admitted;
+					socketOpen = true;
 					invokeCallback("WebSocket ready", () => currentOptions.onReady(admitted));
 					if (!ownsWork(work)) return;
-					socketOpen = true;
 					finishWork(work);
 					lastValidEventAt = tick();
 					reconnectAttempt = 0;
@@ -712,7 +745,10 @@ function connect(expectedGeneration: number): void {
 				const event = decodeMessage(message);
 				if (event === undefined) return;
 				lastValidEventAt = tick();
-				if (event.kind === "ack") {
+				if (event.kind === "peer-control-result") {
+					const pending = peerControls.get(event.requestId);
+					if (pending?.generation === expectedGeneration) finishPeerControl(event.requestId, event.result);
+				} else if (event.kind === "ack") {
 					const pending = pendingResponses.get(event.requestId);
 					if (pending !== undefined && pending.serverUrl === currentOptions.serverUrl) settleResponse(event.requestId, pending, event.disposition);
 				} else if (event.kind === "heartbeat") {
@@ -764,6 +800,29 @@ function flushRefresh(): void {
 	const currentOptions = options;
 	if (!refreshRequested || !active || currentOptions === undefined || refreshWork !== undefined || connectionWork !== undefined || nativeRegistrationPending || !socketOpen) return;
 	refreshRequested = false;
+	if (useSocketRegistration) {
+		const work: TransportWork = { generation, options: currentOptions, stage: "WebSocket metadata refresh" };
+		refreshWork = work;
+		beginStage(work, "WebSocket metadata discovery");
+		// Payload discovery can yield; fence it like the legacy registration.
+		runWork(work, () => {
+			refreshRequested = false;
+			const payload = PluginSession.createReadyPayload(PluginSession.peerId, PluginSession.getRole());
+			if (!ownsWork(work)) return;
+			const sent = requestPeerControl("register", payload, (result) => {
+				if (!ownsWork(work)) return;
+				finishWork(work);
+				if (result.success === true) {
+					const ready = parseReadyResponse(HttpService.JSONEncode(result), false);
+					if (ready !== undefined) { cachedReady = ready; invokeCallback("WebSocket ready", () => currentOptions.onReady(ready)); }
+				} else warn("[robloxstudio-mcp] WebSocket metadata refresh failed; reconnecting");
+				if (result.success !== true) { refreshRequested = true; scheduleReconnect(work.generation, "Metadata refresh failed"); }
+				else flushRefresh();
+			});
+			if (!sent) { finishWork(work); refreshRequested = true; scheduleReconnect(work.generation, "Metadata channel unavailable"); }
+		}, () => { finishWork(work); refreshRequested = true; scheduleReconnect(work.generation, "Metadata discovery failed"); });
+		return;
+	}
 	// Only explicit metadata changes are queued. Failure alone never schedules
 	// more HTTP requests or replaces a healthy transport.
 	const work: TransportWork = { generation, options: currentOptions, stage: "" };
@@ -852,4 +911,4 @@ function stop(): void {
 	if (currentOptions !== undefined) disconnectSession(currentOptions);
 }
 
-export = { start, refresh, suspendForShutdown, resumeAfterShutdownFailure, stop };
+export = { start, refresh, requestPeerControl, suspendForShutdown, resumeAfterShutdownFailure, stop };

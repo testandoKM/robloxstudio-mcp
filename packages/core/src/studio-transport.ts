@@ -76,12 +76,19 @@ export interface StudioAckEvent {
   disposition: SettlementDisposition;
 }
 
+export interface StudioPeerControlEvent {
+  kind: 'peer-control-result';
+  requestId: string;
+  result: Record<string, unknown>;
+}
+
 export type StudioServerEvent =
   | StudioRequestEvent
   | StudioCancelEvent
   | StudioStatusEvent
   | StudioHeartbeatEvent
-  | StudioAckEvent;
+  | StudioAckEvent
+  | StudioPeerControlEvent;
 
 export interface StudioSocket {
   readonly readyState: number;
@@ -116,7 +123,7 @@ interface ActiveStudioSocket {
   heartbeatPending: boolean;
   lastStatusJson?: string;
   lastSeenAt: number;
-  acknowledgements: Map<string, StudioAckEvent>;
+  acknowledgements: Map<string, StudioAckEvent | StudioPeerControlEvent>;
   onClose: () => void;
   onError: () => void;
   onMessage: (data: RawData, isBinary: boolean) => void;
@@ -144,7 +151,8 @@ export class WebSocketStudioTransport {
   private nextGeneration = 0;
   private closed = false;
 
-  constructor(private readonly queue: StudioTransportQueue) {
+  constructor(private readonly queue: StudioTransportQueue,
+    private readonly peerControl?: (owner: string, action: string, data: Record<string, unknown>) => Record<string, unknown>) {
     this.unsubscribeRequestAvailable = queue.onRequestAvailable((transportPeerId) => {
       const connection = this.sockets.get(transportPeerId);
       if (connection) this.pump(connection);
@@ -279,6 +287,29 @@ export class WebSocketStudioTransport {
       message = JSON.parse(buffer.toString('utf8'));
     } catch {
       this.closeSocket(connection, 1007, 'invalid_json');
+      return;
+    }
+    if (message !== null && typeof message === 'object' && !Array.isArray(message)
+      && 'kind' in message && message.kind === 'peer-control') {
+      const control = message as Record<string, unknown>;
+      if (bytes > 8192 || typeof control.requestId !== 'string' || !/^pc:[0-9]+$/.test(control.requestId)
+        || control.requestId.length > 64 || (control.action !== 'register' && control.action !== 'unregister')
+        || !control.data || typeof control.data !== 'object' || Array.isArray(control.data)
+        || !this.peerControl || connection.acknowledgements.size >= MAX_PENDING_ACKS) {
+        this.closeSocket(connection, 1008, 'invalid_peer_control');
+        return;
+      }
+      connection.settling = true;
+      try {
+        const result = this.peerControl(connection.transportPeerId, control.action, control.data as Record<string, unknown>);
+        if (this.isCurrent(connection)) connection.acknowledgements.set(control.requestId, {
+          kind: 'peer-control-result', requestId: control.requestId, result,
+        });
+      } catch {
+        this.closeSocket(connection, 1011, 'peer_control_failed');
+      } finally { connection.settling = false; }
+      this.queue.updatePeerActivity(connection.transportPeerId);
+      this.pump(connection);
       return;
     }
     if (message !== null && typeof message === 'object' && !Array.isArray(message)

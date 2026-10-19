@@ -59,6 +59,7 @@ interface StudioWebSocketOptions {
 }
 
 interface StudioWebSocketModule {
+  requestPeerControl(action: 'register' | 'unregister', data: Record<string, unknown>, callback: (result: Record<string, unknown>) => void): boolean;
   start(options: StudioWebSocketOptions): void;
   refresh(): void;
   suspendForShutdown(): void;
@@ -82,6 +83,7 @@ interface ProgressEnvelope {
 }
 
 interface HarnessOptions {
+  onPeerControl?(event: Record<string, unknown>, stream: MockWebStreamClient): void;
   onSend?(body: string, stream: MockWebStreamClient): void;
   onProgress?(event: ProgressEnvelope, stream: MockWebStreamClient): void;
   onEncode?(value: unknown): void;
@@ -228,6 +230,13 @@ async function createHarness(harnessOptions: HarnessOptions = {}) {
         Close: jest.fn(() => lifecycle.push('close')),
         Send: jest.fn((body: string) => {
           const event: unknown = JSON.parse(body);
+          if (event && typeof event === 'object' && 'kind' in event && event.kind === 'peer-control') {
+            const control = event as Record<string, unknown>;
+            if (harnessOptions.onPeerControl) harnessOptions.onPeerControl(control, stream);
+            else stream.MessageReceived.fire(JSON.stringify({ kind: 'peer-control-result', requestId: control.requestId,
+              result: { success: true, assignedRole: 'edit', peerId: 'peer', instanceId: 'studio-instance', protocolVersion: 1, transportToken: 'test-secret' } }));
+            return;
+          }
           if (event && typeof event === 'object' && 'kind' in event && event.kind === 'disconnect') {
             lifecycle.push('unregister');
             if (!harnessOptions.dropUnregister) stream.Closed.fire();
@@ -472,6 +481,50 @@ describe('Studio WebSocket registration without HTTP', () => {
     expect(harness.socketRequests).toHaveLength(2);
     harness.stream.Opened.fire(101, '');
     expect(harness.onReady).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('peer registration control without HTTP', () => {
+  test('refreshes metadata and registers clients despite exhausted HTTP slots', async () => {
+    const harness = await createHarness({ registerOnSocket: true });
+    harness.exhaustHttpQuota();
+    harness.module.refresh();
+    const callback = jest.fn();
+    expect(harness.module.requestPeerControl('register', { peerId: 'client' }, callback)).toBe(true);
+    expect(callback).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    expect(harness.onReady).toHaveBeenCalledTimes(2);
+    expect(harness.httpRequests).toHaveLength(0);
+    harness.emitRequest('still-usable');
+    expect(harness.dispatchRequest).toHaveBeenCalledTimes(1);
+  });
+  test('bounds pending registrations and releases a lost reply without accepting it later', async () => {
+    const controls: Record<string, unknown>[] = [];
+    const harness = await createHarness({ registerOnSocket: true, onPeerControl(event) { controls.push(event); } });
+    const callback = jest.fn();
+    for (let i = 0; i < 128; i++) expect(harness.module.requestPeerControl('register', {}, callback)).toBe(true);
+    expect(harness.module.requestPeerControl('register', {}, callback)).toBe(false);
+    harness.advance(5);
+    expect(callback).toHaveBeenCalledTimes(128);
+    expect(callback).toHaveBeenLastCalledWith({ success: false, error: 'peer_control_timeout' });
+    harness.stream.MessageReceived.fire(JSON.stringify({ kind: 'peer-control-result', requestId: controls[0].requestId, result: { success: true } }));
+    expect(callback).toHaveBeenCalledTimes(128);
+    expect(harness.module.requestPeerControl('register', {}, callback)).toBe(true);
+  });
+  test('retires pending callbacks on reconnect and fences the old socket', async () => {
+    const controls: Record<string, unknown>[] = [];
+    const harness = await createHarness({ registerOnSocket: true, onPeerControl(event) { controls.push(event); } });
+    const oldMessage = harness.stream.MessageReceived.capture();
+    const oldCallback = jest.fn();
+    harness.module.requestPeerControl('register', {}, oldCallback);
+    harness.reconnect();
+    expect(oldCallback).toHaveBeenCalledTimes(1);
+    expect(oldCallback).toHaveBeenCalledWith({ success: false, error: 'peer_control_disconnected' });
+    const callback = jest.fn();
+    harness.module.requestPeerControl('register', {}, callback);
+    oldMessage(JSON.stringify({ kind: 'peer-control-result', requestId: controls[1].requestId, result: { success: true } }));
+    expect(callback).not.toHaveBeenCalled();
+    harness.stream.MessageReceived.fire(JSON.stringify({ kind: 'peer-control-result', requestId: controls[1].requestId, result: { success: true } }));
+    expect(callback).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1056,7 +1109,8 @@ describe('Studio WebSocket attempt ownership', () => {
     expect(harness.deferredWorkerCount).toBe(1);
     harness.flushSpawns();
     expect(harness.onReady).toHaveBeenCalledTimes(3);
-    expect(harness.httpRequests.filter((request) => request.Url.endsWith('/ready'))).toHaveLength(3);
+    // The replacement switched to socket registration; its refresh uses that channel too.
+    expect(harness.httpRequests.filter((request) => request.Url.endsWith('/ready'))).toHaveLength(2);
     expect(harness.socketRequests.at(-1)?.request.Url).toContain('/studio/connect');
   });
 

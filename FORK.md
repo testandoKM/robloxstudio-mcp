@@ -16,6 +16,11 @@ Chrrxs permanece creditada na interface, na documentacao e na licenca.
 
 ## Primeira investigacao
 
+O candidato **3.2.2-fork.2** corrige o registro do cliente de Play quando a
+resposta HTTP fica presa. O ensaio completo na VFX TEST passou, incluindo
+cliente e reconexao com `/ready` bloqueado; a instalacao de uso diario
+permanece na **3.2.2-fork.1**. Veja a [investigacao e comparacao com a 3.3.0](docs/fork/CLIENT_REGISTRATION_RECOVERY.md).
+
 Leia [o relatorio de conexao](docs/fork/CONNECTION_INVESTIGATION.md). O diagnostico coleta apenas campos permitidos de `/health` e, opcionalmente, uma consulta `get_place_info`. Nao inicia outro servidor, troca portas, instala plugin nem altera o DataModel.
 
 A continuacao esta em [correcao experimental da abertura do canal](docs/fork/CONNECTION_RECOVERY.md).

@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { createServer } from 'node:net';
+import { createServer, createConnection } from 'node:net';
+import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -18,6 +19,7 @@ const runId = randomUUID().replaceAll('-', '').slice(0, 12);
 const scope = `ForkVFX_${runId}`;
 const key = `ForkPackage_${runId}`;
 const gameRoot = `__ForkPackage_${runId}`;
+const clientRecovery = process.argv.includes('--client-recovery');
 const requestPath = path.join(root, 'local/vfx-package-control-request.json');
 const replyPath = path.join(root, 'local/vfx-package-control-reply.json');
 const reportPath = path.join(root, `local/vfx-package-${runId}.json`);
@@ -26,12 +28,44 @@ const dist = path.join(root, 'packages/robloxstudio-mcp/dist/index.js');
 const hash = file => createHash('sha256').update(readFileSync(file)).digest('hex');
 const lua = JSON.stringify;
 const installed = [path.join(process.env.LOCALAPPDATA, 'Roblox/Plugins/MCPPlugin.rbxmx'),
-  path.join(process.env.LOCALAPPDATA, 'Roblox/ChrrxsMCP-3.2.0/node_modules/@chrrxs/robloxstudio-mcp/dist/index.js')];
+  path.join(process.env.LOCALAPPDATA, 'Roblox/ChrrxsMCP-3.2.2-fork.1/node_modules/@chrrxs/robloxstudio-mcp/dist/index.js')];
 const report = { runId, scope, placeId: 76624397270311, gameId: 10764893534, passed: false,
   artifactSha256: hash(artifact), serverSha256: hash(dist), installedBefore: installed.map(hash), events: [] };
 mkdirSync(path.join(root, 'local'), { recursive: true });
 const checkpoint = () => writeFileSync(reportPath, JSON.stringify(report, null, 2) + '\n');
 checkpoint();
+// A transparent loopback proxy holds /ready replies while passing WebSockets.
+// This reproduces the dependency failure without assuming an engine HTTP quota.
+const held = new Set(), proxySockets = new Set(); let holdRegistration = false;
+const faultServer = createHttpServer((req, res) => {
+  if (holdRegistration && req.url === '/ready') {
+    req.resume(); held.add(res); res.once('close', () => held.delete(res)); return;
+  }
+  const upstream = httpRequest({ hostname: '127.0.0.1', port, path: req.url, method: req.method, headers: req.headers }, reply => {
+    res.writeHead(reply.statusCode, reply.headers); reply.pipe(res);
+  });
+  upstream.on('error', () => { if (!res.headersSent) res.writeHead(503); res.end(); });
+  req.pipe(upstream);
+});
+faultServer.on('upgrade', (req, socket, head) => {
+  const upstream = createConnection({ host: '127.0.0.1', port });
+  proxySockets.add(socket); proxySockets.add(upstream);
+  socket.on('close', () => { proxySockets.delete(socket); upstream.destroy(); });
+  upstream.on('close', () => { proxySockets.delete(upstream); socket.destroy(); });
+  socket.on('error', () => upstream.destroy()); upstream.on('error', () => socket.destroy());
+  upstream.on('connect', () => {
+    const headers = Object.entries(req.headers).map(([name, value]) => `${name}: ${value}`).join('\r\n');
+    upstream.write(`${req.method} ${req.url} HTTP/1.1\r\n${headers}\r\n\r\n`);
+    if (head.length) upstream.write(head);
+    socket.pipe(upstream).pipe(socket);
+  });
+});
+let faultPort;
+function releaseHttp() {
+  holdRegistration = false;
+  for (const res of held) { res.writeHead(503); res.end('{"success":false,"error":"test_registration_released"}'); }
+  held.clear();
+}
 
 // Parse the actual built artifact, including its version/icon substitutions and
 // full roblox-ts runtime. Do not substitute hand-written modules or handlers.
@@ -166,7 +200,7 @@ for _,row in ipairs(rows) do local n;
 if row.templatePath then
 local template=assert(game:GetService('PluginDebugService'):FindFirstChild('user_MCPPlugin.rbxmx')).MCPPlugin;
 for _,name in ipairs(row.templatePath) do template=assert(template:FindFirstChild(name)) end;
-local digest=game:GetService('EncodingService'):ComputeStringHash(template.Source,Enum.HashAlgorithm.Sha256);
+local digest=game:GetService('EncodingService'):ComputeStringHash(string.gsub(template.Source,'\\r\\n','\\n'),Enum.HashAlgorithm.Sha256);
 local hex=string.gsub(digest,'.',function(c)return string.format('%02x',string.byte(c)) end);
 assert(hex==row.sourceSha256,'Installed template does not match the complete artifact');assert(#template:GetChildren()==0);n=assert(template:Clone());
 else n=Instance.new(row.className) end;
@@ -179,7 +213,7 @@ return {parity=true};`, dataModel, true); chunk = []; bytes = 0;
   await flush();
   await control(`local f=assert(_G[${lua(key)}]);local main=f.nodes[1];main.Archivable=false;main:SetAttribute('MCPIsolationScope',${lua(scope)});
 local settings=require(main.modules.PluginScope).settings(f.plugin);
-settings:SetSetting('MCP_LAST_SUCCESSFUL_SERVER_URL_GLOBAL_V1','http://127.0.0.1:${port}');
+settings:SetSetting('MCP_LAST_SUCCESSFUL_SERVER_URL_GLOBAL_V1','http://127.0.0.1:${clientRecovery ? faultPort : port}');
 local b=Instance.new('ModuleScript');b.Name='Bootstrap';b.Source=${lua(bootstrap)};b.Parent=f.plugin;f.bootstrap=b;
 task.spawn(function()f.ok,f.result=pcall(require,b);f.bootFinished=true end);return {started=true};`, dataModel, true);
   const state = await control(`local f=assert(_G[${lua(key)}]);local deadline=tick()+12;while not f.bootFinished and tick()<deadline do task.wait(0.1) end;
@@ -192,6 +226,10 @@ return {role=require(m.PeerRole).detect(),version=require(m.State).CURRENT_VERSI
 }
 
 try {
+  if (clientRecovery) {
+    await new Promise(resolve => faultServer.listen(0, '127.0.0.1', resolve));
+    faultPort = faultServer.address().port;
+  }
   report.before = await control(`assert(game:GetService('StudioTestService').EditModeActive);local list={};for _,c in workspace:GetChildren() do table.insert(list,c.Name..':'..c.ClassName) end;table.sort(list);
 return {http=game:GetService('HttpService').HttpEnabled,children=list};`);
   await startServer();
@@ -228,7 +266,14 @@ local p=Instance.new('Part');p.Name='Probe';p.Anchored=true;p.Parent=f;local m=I
     const starting = tool('solo_playtest', { action: 'start', mode: 'play', timeout: 180, instance_id: instance }, 220000)
       .then(value => ({ value }), error => ({ error: error.message }));
     await controller({ kind: 'wait-runtime' });
-    await mount('Server'); await mount('Client');
+    await mount('Server');
+    if (clientRecovery && cycle === 2) {
+      holdRegistration = true;
+      await execute(`task.spawn(function() pcall(function() game:GetService('HttpService'):RequestAsync({Url='http://127.0.0.1:${faultPort}/ready',Method='POST',Headers={['Content-Type']='application/json'},Body='{}'}) end) end);return true`, 'server');
+      await waitFor(() => held.size === 1, 10000, 'native HTTP registration response held');
+      report.events.push({ event: 'http_registration_response_blocked', count: held.size }); checkpoint();
+    }
+    await mount('Client');
     const start = await starting;
     report.runtimeTopology = await snapshot(); checkpoint();
     assert(!start.error, start.error); assert.equal(start.value.success, true);
@@ -241,6 +286,17 @@ local p=Instance.new('Part');p.Name='Probe';p.Anchored=true;p.Parent=f;local m=I
     const clientEval = await tool('eval_client_runtime', { instance_id: instance, target: 'client-1',
       code: `assert(game.PlaceId==${report.placeId});return require(workspace[${lua(gameRoot)}].SourceProbe).value` });
     assert(JSON.stringify(serverEval).includes(scope)); assert(JSON.stringify(clientEval).includes('42'));
+    if (clientRecovery && cycle === 2) {
+      assert.equal(held.size, 1);
+      await control(`require(assert(_G[${lua(key)}]).nodes[1].modules.StudioWebSocket).refresh();return true`, 'Server');
+      await stopServer(); await delay(500); await startServer();
+      await waitFor(async () => (await snapshot()).instances.some(i => i.id === instance && i.peers['client-1']), 35000, 'client re-registration while HTTP is blocked');
+      const recovered = luauResult(await execute(`return {client=game:GetService('RunService'):IsClient(),player=game:GetService('Players').LocalPlayer~=nil}`, 'client-1'));
+      assert.equal(recovered.client, true); assert.equal(recovered.player, true);
+      assert.equal(held.size, 1);
+      report.events.push({ event: 'client_registered_and_reconnected_without_http', held: held.size, recovered }); checkpoint();
+      releaseHttp();
+    }
     if (cycle === 1) {
       const profiler = await tool('capture_micro_profiler', { instance_id: instance, target: 'client-1', duration_ms: 250,
         focus: 'all', max_timers: 5, max_groups: 5, max_events: 10000, frame_window: 30 }, 120000);
@@ -261,6 +317,7 @@ local p=Instance.new('Part');p.Name='Probe';p.Anchored=true;p.Parent=f;local m=I
   report.functionalPassed = true;
 } catch (error) { report.error = error.message; }
 finally {
+  releaseHttp();
   if (startedPlay) {
     try { const state = await controller({ kind: 'cleanup-play', stopAlreadyRequested: stopRequested }); nativeIdle = state.editReady && !state.playtestTaskPending; }
     catch (error) { report.playCleanupError = error.message; }
@@ -289,6 +346,11 @@ return {cleaned=_G[${lua(key)}]==nil and not workspace:FindFirstChild(${lua(game
     catch (error) { report.httpRestoreError = error.message; }
   } else if (editLoaded) { report.cleanupPending = true; }
   await stopServer();
+  if (faultServer.listening) {
+    for (const socket of proxySockets) socket.destroy();
+    faultServer.closeAllConnections();
+    await new Promise(resolve => faultServer.close(resolve));
+  }
   report.installedAfter = installed.map(hash);
   report.installationPreserved = JSON.stringify(report.installedAfter) === JSON.stringify(report.installedBefore);
   report.passed = report.functionalPassed === true && report.cleanup?.cleaned === true && !report.cleanupError && !report.httpRestoreError && report.installationPreserved;

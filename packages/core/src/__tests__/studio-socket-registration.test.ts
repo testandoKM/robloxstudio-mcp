@@ -86,4 +86,65 @@ describe('native WebSocket registration after HTTP registration stalls', () => {
     await rejected({ ...metadata, placeName: 'x'.repeat(4096) }, 400);
     await rejected([], 400);
   });
+
+  async function control(socket: WebSocket, id: number, action: string, data: unknown): Promise<Record<string, unknown>> {
+    const requestId = `pc:${id}`;
+    const result = new Promise<Record<string, unknown>>((resolve) => {
+      const listener = (frame: { toString(): string }) => {
+        const event = JSON.parse(frame.toString());
+        if (event.kind === 'peer-control-result' && event.requestId === requestId) {
+          socket.off('message', listener); resolve(event.result);
+        }
+      };
+      socket.on('message', listener);
+    });
+    socket.send(JSON.stringify({ kind: 'peer-control', requestId, action, data }));
+    return result;
+  }
+  const serverMetadata = { ...metadata, role: 'server', isRunning: true };
+  const clientMetadata = { ...serverMetadata, peerId: 'peer:client', role: 'client' };
+
+  test('registers, targets, refreshes and removes the real client without HTTP /ready', async () => {
+    const socket = connect(serverMetadata);
+    await once(socket, 'message');
+    expect(await control(socket, 1, 'register', clientMetadata)).toMatchObject({ success: true, assignedRole: 'client-1' });
+    socket.on('message', frame => {
+      const event = JSON.parse(frame.toString());
+      if (event.kind === 'request') {
+        expect(event.peerId).toBe(clientMetadata.peerId);
+        expect(event.target).toBe('client-1');
+        socket.send(JSON.stringify({ kind: 'response', requestId: event.requestId, response: { side: 'client' } }));
+      }
+    });
+    await expect(bridge.sendRequest('/api/execute-luau', {}, clientMetadata.peerId, 1000)).resolves.toEqual({ side: 'client' });
+    expect(await control(socket, 2, 'register', clientMetadata)).toMatchObject({ success: true, assignedRole: 'client-1' });
+    expect(bridge.getPeers()).toHaveLength(2);
+    expect(await control(socket, 3, 'register', { ...serverMetadata, placeName: 'renamed' })).toMatchObject({ success: true });
+    expect(bridge.getPeerById(metadata.peerId)?.placeName).toBe('renamed');
+    expect(await control(socket, 4, 'unregister', { peerId: clientMetadata.peerId })).toEqual({ success: true });
+    expect(bridge.getPeers()).toHaveLength(1);
+  });
+
+  test('re-registers clients after a replacement transport and rejects cross-owner control', async () => {
+    const socket = connect(serverMetadata); await once(socket, 'message');
+    expect(await control(socket, 1, 'register', clientMetadata)).toMatchObject({ success: true });
+    const other = connect({ ...serverMetadata, peerId: 'peer:other', transportPeerId: 'peer:other', instanceId: 'instance:other' });
+    await once(other, 'message');
+    expect(await control(other, 1, 'register', { ...clientMetadata, transportPeerId: 'peer:other', instanceId: 'instance:other' })).toMatchObject({ success: false });
+    expect(await control(other, 2, 'unregister', { peerId: clientMetadata.peerId })).toMatchObject({ success: false });
+    expect(bridge.getPeerById(clientMetadata.peerId)?.transportPeerId).toBe(metadata.peerId);
+    const replacement = connect(serverMetadata); await once(replacement, 'message');
+    expect(await control(replacement, 1, 'register', clientMetadata)).toMatchObject({ success: true, assignedRole: 'client-1' });
+    expect(await control(replacement, 2, 'register', { ...clientMetadata, instanceId: 'instance:other' })).toMatchObject({ success: false, error: 'transport_peer_unavailable' });
+    expect(await control(replacement, 3, 'register', { ...clientMetadata, pluginVersion: 'older' })).toMatchObject({ success: false, error: 'plugin_version_mismatch' });
+  });
+
+  test('edit transport cannot publish clients and oversized control is bounded', async () => {
+    const socket = connect(metadata); await once(socket, 'message');
+    expect(await control(socket, 1, 'register', clientMetadata)).toMatchObject({ success: false });
+    const closed = once(socket, 'close');
+    socket.send(JSON.stringify({ kind: 'peer-control', requestId: 'pc:2', action: 'register', data: { ...metadata, placeName: 'x'.repeat(8192) } }));
+    const [code] = await closed;
+    expect(code).toBe(1008);
+  });
 });

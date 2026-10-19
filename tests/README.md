@@ -130,6 +130,18 @@ coverage are recorded in [the full-package report](../docs/fork/FULL_PACKAGE_VAL
 
 ### Directed installed-file validation in VFX TEST
 
+The client registration regression can also run through the complete-package
+controller with `--client-recovery`. Its isolated loopback proxy deliberately
+withholds HTTP `/ready` responses while forwarding WebSockets, then verifies
+client registration and re-registration after a CLI restart. It releases held
+requests and closes only its owned listener/sockets during cleanup. This does
+not assume a particular Roblox HTTP concurrency limit. See
+[the client recovery evidence](../docs/fork/CLIENT_REGISTRATION_RECOVERY.md).
+
+```bash
+node scripts/fork/vfx-package-lab.mjs --vfx-directed --client-recovery
+```
+
 After the in-memory validation, the user explicitly authorized backing up the
 current installation and installing the fork without a second Windows account.
 The installed CLI and native file loader were exercised in a user-reopened VFX
