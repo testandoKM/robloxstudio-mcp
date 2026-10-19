@@ -18,8 +18,8 @@ Chrrxs permanece creditada na interface, na documentacao e na licenca.
 
 A **3.3.0-fork.1** integra a tag upstream 3.3.0 e preserva a correcao do
 registro do cliente quando a resposta HTTP fica presa. O arquivo novo foi
-instalado com backup; a validacao do carregamento nativo e Play/Stop nesta
-versao esta em andamento, sem ativacao confirmada no principal. Veja o
+instalado com backup; carregamento nativo e dois Play/Stop passaram na VFX
+TEST, sem ativacao confirmada no principal. Veja o
 [estado da atualizacao](docs/fork/UPSTREAM_3_3_INSTALLATION.md).
 O ensaio anterior da correcao, na 3.2.2-fork.2, passou na VFX TEST com
 cliente e reconexao apesar de `/ready` bloqueado; evidencias na
