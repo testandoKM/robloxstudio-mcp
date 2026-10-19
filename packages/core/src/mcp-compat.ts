@@ -36,6 +36,7 @@ Tool descriptions explain selection. Input schemas explain arguments. This guide
 
 - Read the relevant source with get_script_source before changing it.
 - Use edit_script_lines, insert_script_lines, or delete_script_lines for focused changes with known line numbers.
+- Put several related replacements in one script into one edit_script_lines call with edits. They match the source as read, apply as one undo step, and none apply if any fails. Pass the revision from get_script_source as expected_revision so a script changed since the read is rejected, and use dry_run to preview the diff.
 - Use set_script_source only when replacing the whole script.
 - Use find_and_replace_in_scripts with dryRun first when a replacement may affect several scripts.
 
@@ -58,6 +59,9 @@ Read output with get_runtime_logs. Reuse nextCursor as cursor for one Instance, 
 - Inspect built-in device IDs with get_device_simulator_state, then apply one with set_device_simulator or compare several with capture_device_matrix.
 - Clear temporary network and device settings with reset_simulation_state after a scenario.
 - Capture the viewport with capture_screenshot before simulate_mouse_input so the pixel coordinates match. Keyboard input should target a live client when game input is under test.
+- Mouse movement needs a client with a mouse; stop touch device emulation with set_device_simulator stopSimulation=true first.
+- To chain inputs in one call or target a GUI element by path, run execute_luau on that client and call UserInputService:CreateVirtualInput() (SendMouseButton, SendMousePosition, SendPointerAction, SendKey, SendTextInput). Convert a GuiObject's AbsolutePosition to viewport pixels by adding GuiService:GetGuiInset() unless its ScreenGui ignores the inset. Wrap the steps in pcall and release held keys and buttons in the same script; its VirtualInput is separate from the one simulate_mouse_input and simulate_keyboard_input use.
+- Do not lock the cursor (MouseBehavior.LockCenter, first-person camera) or call SendMouseDelta: Studio pins and hides the user's real OS cursor while it is locked.
 
 ## Debugging and profiling
 
@@ -76,6 +80,8 @@ Search with search_assets, inspect a shortlist with get_asset_details or get_ass
 Studio must allow third-party asset loading for public third-party previews and insertion. preview_asset scans the complete hierarchy without returning script source. insert_asset removes every LuaSourceContainer and PackageLink before parenting the remaining content, then scans again before insertion.
 
 generate_model stages generated content under ServerStorage for review. upload_asset sends an explicit local file to the chosen Roblox user or group.
+
+generate_model with async=true returns a job status with its requestId before generation finishes. Check it, wait for it, or read its result with get_request_status (wait_ms waits for completion). The job stays on the Studio instance that started it. A disconnected caller or an ended wait never cancels it, and no tool can cancel a running generation. Pass operation_id so a retry with identical arguments joins the same job instead of generating a second model. Results stay available for five minutes after the job finishes (or after timeout_ms passes without a result), within the current server session; large results can be evicted sooner.
 
 ## Monetization
 

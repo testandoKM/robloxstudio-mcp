@@ -1,5 +1,6 @@
 import type { ToolAnnotations } from '@modelcontextprotocol/server';
 import { MAX_PNG_BASE64_CHARACTERS } from '../image-decode.js';
+import { MAX_OPERATION_ID_LENGTH, MAX_OPERATION_WAIT_MS } from '../bridge-service.js';
 
 export type ToolCategory = 'read' | 'write';
 
@@ -11,6 +12,14 @@ export interface ToolDefinition {
   outputSchema?: object;
   annotations?: ToolAnnotations;
 }
+
+/** Caller recovery ID shared by every tool whose retries join one retained operation. */
+const OPERATION_ID_PROPERTY = {
+  type: 'string',
+  minLength: 1,
+  maxLength: MAX_OPERATION_ID_LENGTH,
+  description: 'Unique recovery ID; reuse only for identical arguments.'
+} as const;
 
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
   // === File & Instance Browsing ===
@@ -38,7 +47,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         query: {
           type: 'string',
-          description: 'Text, class, or property value to match.'
+          description: 'Substring; optional with className.'
         },
         searchType: {
           type: 'string',
@@ -49,12 +58,25 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'string',
           description: 'Property to search when searchType is property.'
         },
+        path: {
+          type: 'string',
+          description: 'Subtree root; defaults to game.'
+        },
+        className: {
+          type: 'string',
+          description: 'IsA filter, e.g. BasePart.'
+        },
+        maxResults: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 10000,
+          description: 'Default 100.'
+        },
         instance_id: {
           type: 'string',
           description: 'Studio process ID when ambiguous.'
         }
-      },
-      required: ['query']
+      }
     }
   },
 
@@ -116,12 +138,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        operation_id: {
-          type: 'string',
-          minLength: 1,
-          maxLength: 128,
-          description: 'Unique recovery ID; reuse only for identical arguments.'
-        },
+        operation_id: OPERATION_ID_PROPERTY,
         instancePath: {
           type: 'string',
           description: 'Canonical path of the target instance.'
@@ -190,10 +207,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'edit_script_lines',
     category: 'write',
-    description: 'Use for an exact, localized replacement in one script.',
+    description: 'Use for exact replacements in one script; batched edits apply all or none.',
     inputSchema: {
       type: 'object',
       properties: {
+        operation_id: OPERATION_ID_PROPERTY,
         instancePath: {
           type: 'string',
           description: 'Canonical path of the script.'
@@ -210,12 +228,34 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'string',
           description: 'Start line; required when old_string is not unique.'
         },
+        edits: {
+          type: 'array',
+          maxItems: 100,
+          description: 'Batch instead of old_string; all or none, one undo step.',
+          items: {
+            type: 'object',
+            properties: {
+              old_string: { type: 'string', description: 'Exact text; unique unless line_range is set.' },
+              new_string: { type: 'string', description: 'Replacement text.' },
+              line_range: { type: 'string', description: 'Start line in the source as read.' }
+            },
+            required: ['old_string', 'new_string']
+          }
+        },
+        expected_revision: {
+          type: 'string',
+          description: 'Revision from the last read; rejects stale edits.'
+        },
+        dry_run: {
+          type: 'boolean',
+          description: 'Preview the diff without editing.'
+        },
         instance_id: {
           type: 'string',
           description: 'Studio process ID when ambiguous.'
         }
       },
-      required: ['instancePath', 'old_string', 'new_string']
+      required: ['instancePath']
     }
   },
   {
@@ -350,12 +390,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        operation_id: {
-          type: 'string',
-          minLength: 1,
-          maxLength: 128,
-          description: 'Unique recovery ID; reuse only for identical arguments.'
-        },
+        operation_id: OPERATION_ID_PROPERTY,
         code: {
           type: 'string',
           description: 'Luau code to execute.'
@@ -1207,15 +1242,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_request_status',
     category: 'read',
-    description: 'Use to recover a retained Studio operation outcome after a timeout.',
+    description: 'Use to check, await, or recover a retained Studio operation.',
     inputSchema: {
       type: 'object',
       properties: {
         request_id: {
           type: 'string',
           minLength: 1,
-          maxLength: 128,
+          maxLength: MAX_OPERATION_ID_LENGTH,
           description: 'Caller operation ID or request ID from a server error.'
+        },
+        wait_ms: {
+          type: 'integer',
+          minimum: 0,
+          maximum: MAX_OPERATION_WAIT_MS,
+          description: 'Max ms to await settlement; never cancels.'
         }
       },
       required: ['request_id']
@@ -1333,6 +1374,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
+        operation_id: OPERATION_ID_PROPERTY,
+        async: {
+          type: 'boolean',
+          description: 'Return job status before generation ends.'
+        },
         prompt: {
           type: 'string',
           description: 'Generation prompt; required without an image.'
@@ -1393,7 +1439,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           minimum: 1,
           maximum: 300000,
           default: 120000,
-          description: 'Bridge timeout in ms.'
+          description: 'Bridge deadline in ms; never cancels generation.'
         },
         instance_id: {
           type: 'string',
@@ -1574,13 +1620,13 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'simulate_mouse_input',
     category: 'write',
-    description: 'Use to click the live playtest viewport at known pixel coordinates.',
+    description: 'Use to click, move, or scroll a live playtest viewport.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['click', 'mouseDown', 'mouseUp'],
+          enum: ['click', 'mouseDown', 'mouseUp', 'move', 'scroll'],
           description: 'Mouse action; click performs down, then up.'
         },
         x: {
@@ -1591,10 +1637,14 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'number',
           description: 'Viewport pixel Y coordinate.'
         },
+        wheel: {
+          type: 'number',
+          description: 'For scroll; negative is down.'
+        },
         button: {
           type: 'string',
           enum: ['Left', 'Right', 'Middle'],
-          description: 'Mouse button; defaults to Left.'
+          description: 'Defaults to Left.'
         },
         target: {
           type: 'string',

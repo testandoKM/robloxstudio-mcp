@@ -2,6 +2,11 @@
 
 Data local: 2026-10-14. Versao: `3.2.2-fork.1`.
 
+Este documento registra a instalacao historica dessa versao. Para a
+atualizacao autorizada em 2026-10-19, consulte
+[KMCP 3.3.0-fork.1](UPSTREAM_3_3_INSTALLATION.md), incluindo o estado da
+validacao nativa e da ativacao no principal.
+
 `DECISAO`: o usuario autorizou instalar o fork, preservar a versao atual em
 backup e testar carregamento e Play/Stop na VFX TEST antes de usar no projeto
 principal. Nao criar outra conta Windows. Nenhum push ou salvamento/publicacao

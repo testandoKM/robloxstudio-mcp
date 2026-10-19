@@ -5,8 +5,9 @@ import { randomBytes } from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { toNodeHandler } from '@modelcontextprotocol/node';
-import { RobloxStudioTools } from './tools/index.js';
-import { BridgeService, MultiplayerGroupInUseError, RequestFailure, RoutingFailure } from './bridge-service.js';
+import { MAX_SCRIPT_EDITS, RobloxStudioTools } from './tools/index.js';
+import type { ScriptEdit } from './tools/index.js';
+import { BridgeService, isValidOperationId, MAX_OPERATION_WAIT_MS, MultiplayerGroupInUseError, PRIMARY_PROXY_FEATURES, RequestFailure, RoutingFailure } from './bridge-service.js';
 import type { PublicStudioInstance, PublicStudioPeer, RegisterPeerResult } from './bridge-service.js';
 import type { ToolDefinition } from './tools/definitions.js';
 import { createToolHttpHandler, normalizeToolResult, publicToolErrorBody } from './mcp-runtime.js';
@@ -190,12 +191,53 @@ function requiredClosedLineRange(body: any, toolName: string): { startLine: numb
   return { startLine: parsed.startLine, endLine: parsed.endLine };
 }
 
+// edit_script_lines takes either one top-level old_string/new_string or an
+// `edits` array; mixing them would leave which edit wins ambiguous.
+function scriptEditsFromBody(body: Record<string, unknown>): ScriptEdit[] {
+  const toolName = 'edit_script_lines';
+  if (body.edits === undefined) {
+    if (typeof body.old_string !== 'string' || typeof body.new_string !== 'string') {
+      throw new Error(`Instance path, old_string, and new_string are required for ${toolName}`);
+    }
+    return [{ oldString: body.old_string, newString: body.new_string, startLine: optionalLineAnchor(body, toolName) }];
+  }
+  if (body.old_string !== undefined || body.new_string !== undefined || body.line_range !== undefined) {
+    throw new Error(`${toolName} takes either edits or old_string/new_string/line_range, not both`);
+  }
+  if (!Array.isArray(body.edits) || body.edits.length === 0) {
+    throw new Error(`${toolName} edits must be a nonempty array`);
+  }
+  if (body.edits.length > MAX_SCRIPT_EDITS) {
+    throw new Error(`${toolName} accepts at most ${MAX_SCRIPT_EDITS} edits`);
+  }
+  return body.edits.map((edit: unknown, index: number): ScriptEdit => {
+    if (!edit || typeof edit !== 'object' || Array.isArray(edit)) {
+      throw new Error(`${toolName} edits[${index}] must be an object`);
+    }
+    const fields = edit as Record<string, unknown>;
+    if (typeof fields.old_string !== 'string' || typeof fields.new_string !== 'string') {
+      throw new Error(`${toolName} edits[${index}] requires old_string and new_string`);
+    }
+    return {
+      oldString: fields.old_string,
+      newString: fields.new_string,
+      startLine: optionalLineAnchor(fields, `${toolName} edits[${index}]`),
+    };
+  });
+}
+
 export const TOOL_HANDLERS: Record<string, ToolHandler> = {
-  get_request_status: (tools, body) => tools.getRequestStatus(body.request_id),
+  get_request_status: (tools, body, context) => tools.getRequestStatus(body.request_id, body.wait_ms, context?.signal),
   get_roblox_skills: (tools, body) => tools.getRobloxSkills(body.action, body.name),
   get_roblox_docs: (tools, body) => tools.getRobloxDocs(body.name, body.doc_type, body.section),
   get_place_info: (tools, body) => tools.getPlaceInfo(body.instance_id),
-  search_objects: (tools, body) => tools.searchObjects(body.query, body.searchType, body.propertyName, body.instance_id),
+  search_objects: (tools, body) => tools.searchObjects(body.query, {
+    searchType: body.searchType,
+    propertyName: body.propertyName,
+    path: body.path,
+    className: body.className,
+    maxResults: body.maxResults,
+  }, body.instance_id),
   get_instance_properties: (tools, body) => tools.getInstanceProperties(body.instancePath, body.excludeSource, body.instance_id),
   get_project_structure: (tools, body) => tools.getProjectStructure(body.path, body.maxDepth, body.scriptsOnly, body.instance_id),
   set_properties: (tools, body) => tools.setProperties(body.instancePath, body.properties, body.instance_id, body.operation_id),
@@ -214,7 +256,10 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     return tools.getScriptSource(body.instancePath, startLine, endLine, body.instance_id);
   },
   set_script_source: (tools, body) => tools.setScriptSource(body.instancePath, body.source, body.instance_id),
-  edit_script_lines: (tools, body) => tools.editScriptLines(body.instancePath, body.old_string, body.new_string, optionalLineAnchor(body, 'edit_script_lines'), body.instance_id),
+  edit_script_lines: (tools, body) => tools.editScriptLines(body.instancePath, scriptEditsFromBody(body), {
+    expectedRevision: body.expected_revision,
+    dryRun: body.dry_run,
+  }, body.instance_id, body.operation_id),
   insert_script_lines: (tools, body) => tools.insertScriptLines(body.instancePath, body.afterLine, body.newContent, body.instance_id),
   delete_script_lines: (tools, body) => {
     const { startLine, endLine } = requiredClosedLineRange(body, 'delete_script_lines');
@@ -283,7 +328,7 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
   ),
   upload_asset: (tools, body) => tools.uploadAsset(body.filePath, body.assetType, body.displayName, body.description, body.userId, body.groupId),
   capture_screenshot: (tools, body) => tools.captureScreenshot(body.instance_id, body.format, body.quality),
-  simulate_mouse_input: (tools, body) => tools.simulateMouseInput(body.action, body.x, body.y, body.button, body.scrollDirection, body.target, body.instance_id),
+  simulate_mouse_input: (tools, body) => tools.simulateMouseInput(body.action, body.x, body.y, body.button, body.wheel, body.target, body.instance_id),
   simulate_keyboard_input: (tools, body) => tools.simulateKeyboardInput(body.keyCode, body.action, body.duration, body.text, body.target, body.instance_id),
   get_memory_breakdown: (tools, body) => tools.getMemoryBreakdown(body.target, body.tags, body.instance_id),
   get_scene_analysis: (tools, body) => tools.getSceneAnalysis(body.mode, body.target, body.topN, body.raw, body.instance_id),
@@ -929,6 +974,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     res.json({
       ...bridge.getTopologySnapshot(),
       serverVersion: serverConfig?.version,
+      proxyFeatures: PRIMARY_PROXY_FEATURES,
     });
   });
 
@@ -945,18 +991,32 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     res.status(426).json({ error: 'studio_websocket_required', protocolVersion: STUDIO_PROTOCOL_VERSION });
   });
 
-  app.get('/request-status', (req, res) => {
+  app.get('/request-status', async (req, res) => {
     const requestId = req.query.requestId;
     if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 1024) {
       res.status(400).json({ error: 'invalid_request_id' });
       return;
     }
-    res.json({ status: bridge.getRequestStatus(requestId) ?? null });
+    const waitMs = req.query.waitMs === undefined ? 0 : Number(req.query.waitMs);
+    if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > MAX_OPERATION_WAIT_MS) {
+      res.status(400).json({ error: `waitMs must be an integer between 0 and ${MAX_OPERATION_WAIT_MS}` });
+      return;
+    }
+    // A disconnected caller ends only its own wait, never the operation.
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    res.once('close', abort);
+    try {
+      const status = await bridge.waitForRequestStatus(requestId, waitMs, controller.signal);
+      if (!res.destroyed) res.json({ status: status ?? null });
+    } finally {
+      res.removeListener('close', abort);
+    }
   });
 
 
   app.post('/proxy', async (req, res) => {
-    const { endpoint, data, targetPeerId, proxyInstanceId, timeoutMs, operationId } = req.body;
+    const { endpoint, data, targetPeerId, proxyInstanceId, timeoutMs, operationId, identity, submit } = req.body;
 
     if (!endpoint || !targetPeerId) {
       res.status(400).json({ error: 'endpoint and targetPeerId are required' });
@@ -979,8 +1039,12 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     if (proxyInstanceId) {
       proxyInstances.add(proxyInstanceId);
     }
-    if (operationId !== undefined && (typeof operationId !== 'string' || operationId.trim().length === 0 || operationId.length > 128)) {
+    if (operationId !== undefined && !isValidOperationId(operationId)) {
       res.status(400).json({ error: 'operationId must be a non-empty string of at most 128 characters' });
+      return;
+    }
+    if (submit !== undefined && typeof submit !== 'boolean') {
+      res.status(400).json({ error: 'submit must be a boolean' });
       return;
     }
 
@@ -989,14 +1053,11 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     req.once('aborted', abort);
     res.once('close', abort);
     try {
-      const response = await bridge.sendRequest(
-        endpoint,
-        data,
-        targetPeerId,
-        timeoutMs,
-        controller.signal,
-        operationId,
-      );
+      // A submission is answered at admission and outlives this HTTP exchange;
+      // only a waiting request is tied to it.
+      const response = submit
+        ? await bridge.submitRequest(endpoint, data, targetPeerId, timeoutMs, operationId, identity)
+        : await bridge.sendRequest(endpoint, data, targetPeerId, timeoutMs, controller.signal, operationId, identity);
       res.json({ response });
     } catch (error) {
       if (!res.headersSent && !res.destroyed) {

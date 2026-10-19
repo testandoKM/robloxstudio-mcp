@@ -16,10 +16,14 @@ Chrrxs permanece creditada na interface, na documentacao e na licenca.
 
 ## Primeira investigacao
 
-O candidato **3.2.2-fork.2** corrige o registro do cliente de Play quando a
-resposta HTTP fica presa. O ensaio completo na VFX TEST passou, incluindo
-cliente e reconexao com `/ready` bloqueado; a instalacao de uso diario
-permanece na **3.2.2-fork.1**. Veja a [investigacao e comparacao com a 3.3.0](docs/fork/CLIENT_REGISTRATION_RECOVERY.md).
+A **3.3.0-fork.1** integra a tag upstream 3.3.0 e preserva a correcao do
+registro do cliente quando a resposta HTTP fica presa. O arquivo novo foi
+instalado com backup; a validacao do carregamento nativo e Play/Stop nesta
+versao esta em andamento, sem ativacao confirmada no principal. Veja o
+[estado da atualizacao](docs/fork/UPSTREAM_3_3_INSTALLATION.md).
+O ensaio anterior da correcao, na 3.2.2-fork.2, passou na VFX TEST com
+cliente e reconexao apesar de `/ready` bloqueado; evidencias na
+[investigacao do cliente](docs/fork/CLIENT_REGISTRATION_RECOVERY.md).
 
 Leia [o relatorio de conexao](docs/fork/CONNECTION_INVESTIGATION.md). O diagnostico coleta apenas campos permitidos de `/health` e, opcionalmente, uma consulta `get_place_info`. Nao inicia outro servidor, troca portas, instala plugin nem altera o DataModel.
 
