@@ -17,10 +17,19 @@ X-MCP-Auth: <token>
 Authorization: Bearer <token>
 ```
 
-Plugin registration (`/ready`) and disconnect (`/disconnect`) do not require the
-local HTTP client token because Roblox Studio plugins cannot read that file.
-Registration issues a per-transport token for the authenticated `/studio`
-WebSocket upgrade. Commands, observed execution progress, responses, and
+Plugin registration (`/ready`, or `/studio/connect`) and disconnect
+(`/disconnect`) do not require the local HTTP client token because Roblox
+Studio plugins cannot read that file.
+The fork plugin registers directly through a native WebSocket upgrade to
+`/studio/connect?protocolVersion=1&registration=<URL-encoded JSON>`. This avoids
+waiting for a separate HTTP `/ready` request before opening the channel. Metadata
+is limited to 4096 UTF-8 bytes and uses the same topology, version and origin
+checks as HTTP registration. Only a transport owner can use this endpoint;
+playtest clients continue registering through their play-server transport.
+The first frame is `kind: "ready"` with the assigned identity and credentials.
+The plugin validates that frame before dispatching requests. The legacy `/ready`
+route still issues a per-transport token for the authenticated `/studio`
+upgrade. Commands, observed execution progress, responses, and
 acknowledgements share that persistent socket; playtest client routes are
 multiplexed through their play-server transport. These plugin endpoints cannot
 directly invoke tools. The retired Studio `/events` stream and `/response`
@@ -37,10 +46,15 @@ and treat the token as a secret.
 While the plugin is enabled, connection failures retry automatically with
 backoff of 0.5, 1, 2, 4, then 5 seconds (capped at 5 seconds, with no retry
 limit). Duplicate-instance registration responses use a 1-second retry.
-Registration (`/ready`, including metadata preparation) and WebSocket
+Registration (including metadata preparation) and WebSocket
 creation/upgrade each have a 20-second deadline. A stalled phase is abandoned
-and retried; late completions cannot replace the current connection. An open
-socket with no valid incoming events for 20 seconds is also reconnected.
+and retried; late completions cannot replace the current connection. Native
+creation and HTTP registration calls remain single-flight even after a deadline:
+their Lua workers are allowed to return, and late socket handles are closed.
+A reconnect does not start another native creation while the previous one is
+pending. A legacy HTTP registration timeout switches to socket registration;
+a restarted session also bypasses a predecessor's pending HTTP registration.
+An open socket with no valid incoming events for 20 seconds is also reconnected.
 
 The server pings each Studio socket every 10 seconds and closes one that has
 not answered for 30 seconds. A closed socket's peer is unregistered about 30
@@ -59,6 +73,11 @@ quota is exhausted. If that socket cannot open, including a timeout or an
 upgrade rejection without a numeric HTTP status, its cached credentials are
 discarded and the next attempt registers again. Replacing the bridge does not
 require toggling Disconnect/Connect.
+
+`GET /health` keeps `pluginConnected` as registration compatibility information.
+Use `transportConnected` and `connectionState` (`disconnected`,
+`registered_without_transport`, or `transport_open`) to distinguish that from
+an open channel. An open channel alone does not prove a tool command succeeded.
 
 The plugin panel shows the connection stage, attempt number, retry countdown,
 and last failure. A live connection with no MCP client is shown separately from
@@ -92,8 +111,14 @@ timeout, and a Studio that finished signing in closes without delay.
 
 ## Version compatibility
 
-The Studio plugin and MCP server must have the same version. `/ready` rejects a
-mismatched plugin rather than keeping an unsupported protocol pair connected.
+The Studio plugin and MCP server must have the same version. Both registration
+routes reject a mismatched plugin rather than keeping an unsupported protocol
+pair connected.
+
+The fork's `3.2.2-fork.1` transport changes are experimental until the isolated
+Studio gates pass; see [the investigation](fork/CONNECTION_RECOVERY.md). Build
+with `npm run build:plugin:artifact` to prepare a test artifact without replacing
+the installed plugin.
 
 Restart the MCP server with `--auto-install-plugin`, then fully close and reopen
 Studio to load the matching bundled plugin.

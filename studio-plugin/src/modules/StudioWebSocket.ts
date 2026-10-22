@@ -35,6 +35,7 @@ const SHUTDOWN_UNREGISTER_POLL_SECONDS = 0.05;
 
 interface StudioWebSocketOptions {
 	serverUrl: string;
+	registerOnSocket?: boolean;
 	dispatchRequest: (request: StudioRequestEvent, context: StudioRequestContext) => unknown;
 	onStatus: (status: StudioStatusEvent) => void;
 	onHeartbeat: (timestamp: number) => void;
@@ -43,6 +44,7 @@ interface StudioWebSocketOptions {
 }
 
 type DecodedEvent = StudioRequestEvent | StudioCancelEvent | StudioStatusEvent | StudioAckEvent
+  | { kind: "peer-control-result"; requestId: string; result: Record<string, unknown> }
 	| { kind: "heartbeat"; timestamp: number };
 
 interface RequestProgress {
@@ -81,6 +83,7 @@ interface TransportWork {
 	stage: string;
 	worker?: thread;
 	deadline?: thread;
+	nativePending?: boolean;
 }
 
 let options: StudioWebSocketOptions | undefined;
@@ -93,6 +96,12 @@ let socketOpen = false;
 let socketConnections: RBXScriptConnection[] = [];
 let lastValidEventAt = 0;
 let cachedReady: ReadyResponse | undefined;
+// A native HTTP call can stay queued after its Lua waiter timed out. Once
+// registration stalls, reconnect through the WebSocket upgrade itself rather
+// than adding another request to Studio's HTTP queue.
+let useSocketRegistration = false;
+let nativeRegistrationPending = false;
+let nativeCreationPending = false;
 let connectionWork: TransportWork | undefined;
 let refreshWork: TransportWork | undefined;
 let refreshRequested = false;
@@ -108,6 +117,33 @@ const terminalResponseOrder: Array<TerminalResponse | undefined> = [];
 let terminalHead = 0;
 let terminalCount = 0;
 const readyFailureLogKeys = new Set<string>();
+let nextPeerControlId = 0;
+const peerControls = new Map<string, { generation: number; callback: (result: Record<string, unknown>) => void; timer?: thread }>();
+
+function finishPeerControl(requestId: string, result: Record<string, unknown>): void {
+	const pending = peerControls.get(requestId);
+	if (pending === undefined) return;
+	peerControls.delete(requestId);
+	cancelThread(pending.timer);
+	task.spawn(() => invokeCallback("Peer registration", () => pending.callback(result)));
+}
+
+// Registration is idempotent metadata, separate from command execution and its
+// unknown-outcome/replay contract. Never use Studio's shared HTTP slots here.
+function requestPeerControl(action: "register" | "unregister", data: Record<string, unknown>, callback: (result: Record<string, unknown>) => void): boolean {
+	const client = socketClient;
+	if (!active || !socketOpen || client === undefined || peerControls.size() >= 128) return false;
+	const requestId = `pc:${++nextPeerControlId}`;
+	const pending = { generation, callback, timer: undefined as thread | undefined };
+	peerControls.set(requestId, pending);
+	pending.timer = task.delay(5, () => {
+		pending.timer = undefined;
+		finishPeerControl(requestId, { success: false, error: "peer_control_timeout" });
+	});
+	const [ok] = pcall(() => client.Send(HttpService.JSONEncode({ kind: "peer-control", requestId, action, data })));
+	if (!ok) finishPeerControl(requestId, { success: false, error: "peer_control_send_failed" });
+	return true;
+}
 
 function validRequestId(value: unknown): value is string {
 	return typeIs(value, "string") && value.size() > 0 && value.size() <= MAX_REQUEST_ID_BYTES;
@@ -133,6 +169,10 @@ function decodeMessage(payload: string): DecodedEvent | undefined {
 		};
 	}
 	if (!validRequestId(envelope.requestId)) return undefined;
+	if (envelope.kind === "peer-control-result") {
+		if (!typeIs(envelope.result, "table")) return undefined;
+		return { kind: "peer-control-result", requestId: envelope.requestId, result: envelope.result as Record<string, unknown> };
+	}
 	if (envelope.kind === "ack") {
 		if (envelope.disposition !== "accepted" && envelope.disposition !== "already_settled" && envelope.disposition !== "unknown") return undefined;
 		return { kind: "ack", requestId: envelope.requestId, disposition: envelope.disposition };
@@ -179,6 +219,21 @@ function disconnectSession(currentOptions: StudioWebSocketOptions): void {
 
 function retryDelay(attempt: number): number {
 	return math.min(INITIAL_RETRY_DELAY_SECONDS * math.pow(2, math.max(attempt - 1, 0)), MAX_RETRY_DELAY_SECONDS);
+}
+
+function socketCreationFailure(value: unknown): string {
+	const detail = string.lower(tostring(value));
+	for (const [term, category] of [["too many webstreamclients", "native stream limit"], ["limit", "native stream limit"], ["header", "request headers"],
+		["url", "request URL"], ["permission", "network permission"], ["capability", "network capability"],
+		["method", "request method"], ["cast", "request dictionary"], ["dictionary", "request dictionary"]]) {
+		if (string.find(detail, term, 1, true)[0] !== undefined) return `Failed to create WebSocket (${category})`;
+	}
+	for (const sensitive of ["token", "authorization", "bearer", "cookie", "password", "secret"]) {
+		if (string.find(detail, sensitive, 1, true)[0] !== undefined) return "Failed to create WebSocket (sensitive native details hidden)";
+	}
+	let [safe] = string.gsub(tostring(value), "%w+://%S+", "[address hidden]");
+	[safe] = string.gsub(safe, "%c", " ");
+	return `Failed to create WebSocket: ${string.sub(safe, 1, 180)}`;
 }
 
 function pruneTerminalResponses(): void {
@@ -421,12 +476,16 @@ function finishWork(work: TransportWork): void {
 	if (connectionWork === work) connectionWork = undefined;
 	if (refreshWork === work) refreshWork = undefined;
 	cancelThread(work.deadline);
-	cancelThread(work.worker);
+	// Cancelling a Lua thread does not reliably cancel native network work.
+	// Let an in-flight call return: its ownership guard will release a late
+	// client instead of losing the only handle that can Close it.
+	if (!work.nativePending) cancelThread(work.worker);
 	work.deadline = undefined;
 	work.worker = undefined;
 }
 
 function cancelTransportWork(): void {
+	for (const [requestId] of peerControls) finishPeerControl(requestId, { success: false, error: "peer_control_disconnected" });
 	if (connectionWork !== undefined) finishWork(connectionWork);
 	if (refreshWork !== undefined) {
 		refreshRequested = true;
@@ -462,6 +521,7 @@ function beginStage(work: TransportWork, stage: string): void {
 		if (!ownsWork(work)) return;
 		work.deadline = undefined;
 		const detail = `${stage} timed out after ${CONNECTION_STAGE_TIMEOUT_SECONDS} seconds`;
+		if (stage === "/ready registration") useSocketRegistration = true;
 		if (connectionWork === work) scheduleReconnect(work.generation, detail);
 		else {
 			finishWork(work);
@@ -508,11 +568,12 @@ function watchForSilence(expectedGeneration: number, expectedClient: WebStreamCl
 	});
 }
 
-function parseReadyResponse(body: string): ReadyResponse | undefined {
+function parseReadyResponse(body: string, socketRegistration = false): ReadyResponse | undefined {
 	const [decodeOk, decoded] = pcall(() => HttpService.JSONDecode(body));
 	if (!decodeOk || !typeIs(decoded, "table")) return undefined;
 	const value = decoded as Record<string, unknown>;
 	if (
+		(socketRegistration && value.kind !== "ready") ||
 		value.success !== true || !typeIs(value.assignedRole, "string") || value.assignedRole === "" ||
 		!typeIs(value.peerId, "string") || value.peerId === "" || !typeIs(value.instanceId, "string") || value.instanceId === "" ||
 		value.protocolVersion !== PROTOCOL_VERSION || !typeIs(value.transportToken, "string") || value.transportToken === "" ||
@@ -534,12 +595,21 @@ function registerReady(work: TransportWork, reconnectOnFailure: boolean): ReadyR
 	const readyUrl = `${currentOptions.serverUrl}/ready`;
 	const readyPayload = PluginSession.createReadyPayload(PluginSession.peerId, transportRole, instanceId, multiplayerGroupId);
 	if (!ownsWork(work)) return undefined;
+	if (nativeRegistrationPending) return undefined;
+	nativeRegistrationPending = true;
+	work.nativePending = true;
 	const [readyOk, readyResult] = pcall(() => HttpService.RequestAsync({
 		Url: readyUrl, Method: "POST", Headers: { "Content-Type": "application/json" }, Body: HttpService.JSONEncode(readyPayload),
 	}));
-	if (!ownsWork(work)) return undefined;
+	work.nativePending = false;
+	nativeRegistrationPending = false;
+	if (!ownsWork(work)) {
+		if (active) flushRefresh();
+		return undefined;
+	}
 	const readyLogKey = `${currentOptions.serverUrl}|${PluginSession.peerId}`;
 	if (!readyOk || !readyResult.Success) {
+		if (!readyOk) useSocketRegistration = true;
 		const detail = readyOk ? HttpDiagnostics.formatRequestFailure(readyUrl, true, readyResult)
 			: HttpDiagnostics.formatRequestFailure(readyUrl, false, readyResult);
 		if (!readyFailureLogKeys.has(readyLogKey)) {
@@ -573,20 +643,41 @@ function connect(expectedGeneration: number): void {
 	if (refreshWork !== undefined) finishWork(refreshWork);
 	const work: TransportWork = { generation: expectedGeneration, options: currentOptions, stage: "" };
 	connectionWork = work;
-	beginStage(work, cachedReady === undefined ? "/ready registration" : "WebSocket upgrade");
+	// A restarted session must not wait behind its predecessor's native HTTP
+	// registration or create a second one. Bootstrap directly on the socket.
+	const socketRegistration = useSocketRegistration || nativeRegistrationPending;
+	if (socketRegistration) useSocketRegistration = true;
+	beginStage(work, socketRegistration ? "WebSocket registration" : cachedReady === undefined ? "/ready registration" : "WebSocket upgrade");
 	if (!ownsWork(work)) return;
 	runWork(work, () => {
-		const readyData = cachedReady ?? registerReady(work, true);
-		if (readyData === undefined || !ownsWork(work)) return;
+		const readyData = socketRegistration ? undefined : cachedReady ?? registerReady(work, true);
+		if ((!socketRegistration && readyData === undefined) || !ownsWork(work)) return;
+		const registrationPayload = socketRegistration
+			? PluginSession.createReadyPayload(PluginSession.peerId, PluginSession.getRole(), PluginSession.getInstanceId(), PluginSession.getMultiplayerGroupId()) : undefined;
+		const registrationJson = registrationPayload === undefined ? undefined : HttpService.JSONEncode(registrationPayload);
+		if (registrationJson !== undefined && registrationJson.size() > 4096) {
+			scheduleReconnect(expectedGeneration, "WebSocket registration metadata exceeds 4096 bytes");
+			return;
+		}
 		if (work.stage !== "WebSocket upgrade") beginStage(work, "WebSocket upgrade");
 		if (!ownsWork(work)) return;
+		if (nativeCreationPending) {
+			scheduleReconnect(expectedGeneration, "Waiting for previous native WebSocket creation to settle");
+			return;
+		}
 		const [socketBaseUrl] = currentOptions.serverUrl.gsub("^http", "ws");
+		nativeCreationPending = true;
+		work.nativePending = true;
 		const [createOk, createdClient] = pcall(() => HttpService.CreateWebStreamClient(Enum.WebStreamClientType.WebSocket, {
-			Url: `${socketBaseUrl}/studio?peerId=${HttpService.UrlEncode(PluginSession.peerId)}&protocolVersion=${PROTOCOL_VERSION}`,
-			Headers: { "X-Studio-Token": readyData.transportToken },
+			Url: registrationJson !== undefined
+				? `${socketBaseUrl}/studio/connect?protocolVersion=${PROTOCOL_VERSION}&registration=${HttpService.UrlEncode(registrationJson)}`
+				: `${socketBaseUrl}/studio?peerId=${HttpService.UrlEncode(PluginSession.peerId)}&protocolVersion=${PROTOCOL_VERSION}`,
+			Headers: readyData !== undefined ? { "X-Studio-Token": readyData.transportToken } : { "X-Studio-Bootstrap": "1" },
 		}));
+		work.nativePending = false;
+		nativeCreationPending = false;
 		if (!createOk) {
-			scheduleReconnect(expectedGeneration, "Failed to create WebSocket");
+			scheduleReconnect(expectedGeneration, socketCreationFailure(createdClient));
 			return;
 		}
 		if (!ownsWork(work)) {
@@ -604,6 +695,7 @@ function connect(expectedGeneration: number): void {
 					scheduleReconnect(expectedGeneration, `WebSocket opened with HTTP ${statusCode}`);
 					return;
 				}
+				if (socketRegistration) return; // The versioned ready frame completes admission.
 				socketOpen = true;
 				finishWork(work);
 				lastValidEventAt = tick();
@@ -628,10 +720,35 @@ function connect(expectedGeneration: number): void {
 					scheduleReconnect(expectedGeneration, detail);
 					return;
 				}
+				if (socketRegistration && !socketOpen) {
+					const admitted = parseReadyResponse(message, true);
+					if (admitted === undefined || admitted.peerId !== PluginSession.peerId
+						|| admitted.instanceId !== registrationPayload?.instanceId
+						|| admitted.multiplayerGroupId !== registrationPayload?.multiplayerGroupId) {
+						scheduleReconnect(expectedGeneration, "Invalid WebSocket registration response");
+						return;
+					}
+					cachedReady = admitted;
+					socketOpen = true;
+					invokeCallback("WebSocket ready", () => currentOptions.onReady(admitted));
+					if (!ownsWork(work)) return;
+					finishWork(work);
+					lastValidEventAt = tick();
+					reconnectAttempt = 0;
+					reportTransport({ state: "open", attempt: 0, retryDelay: 0 });
+					if (!active || generation !== expectedGeneration || socketClient !== createdClient) return;
+					watchForSilence(expectedGeneration, createdClient);
+					resumePendingResponses();
+					flushRefresh();
+					return;
+				}
 				const event = decodeMessage(message);
 				if (event === undefined) return;
 				lastValidEventAt = tick();
-				if (event.kind === "ack") {
+				if (event.kind === "peer-control-result") {
+					const pending = peerControls.get(event.requestId);
+					if (pending?.generation === expectedGeneration) finishPeerControl(event.requestId, event.result);
+				} else if (event.kind === "ack") {
 					const pending = pendingResponses.get(event.requestId);
 					if (pending !== undefined && pending.serverUrl === currentOptions.serverUrl) settleResponse(event.requestId, pending, event.disposition);
 				} else if (event.kind === "heartbeat") {
@@ -671,6 +788,7 @@ function connect(expectedGeneration: number): void {
 function start(newOptions: StudioWebSocketOptions): void {
 	if (active || shutdownSuspended) stop();
 	options = newOptions;
+	useSocketRegistration = newOptions.registerOnSocket === true;
 	active = true;
 	shutdownSuspended = false;
 	reconnectAttempt = 0;
@@ -680,8 +798,31 @@ function start(newOptions: StudioWebSocketOptions): void {
 
 function flushRefresh(): void {
 	const currentOptions = options;
-	if (!refreshRequested || !active || currentOptions === undefined || refreshWork !== undefined || connectionWork !== undefined || !socketOpen) return;
+	if (!refreshRequested || !active || currentOptions === undefined || refreshWork !== undefined || connectionWork !== undefined || nativeRegistrationPending || !socketOpen) return;
 	refreshRequested = false;
+	if (useSocketRegistration) {
+		const work: TransportWork = { generation, options: currentOptions, stage: "WebSocket metadata refresh" };
+		refreshWork = work;
+		beginStage(work, "WebSocket metadata discovery");
+		// Payload discovery can yield; fence it like the legacy registration.
+		runWork(work, () => {
+			refreshRequested = false;
+			const payload = PluginSession.createReadyPayload(PluginSession.peerId, PluginSession.getRole());
+			if (!ownsWork(work)) return;
+			const sent = requestPeerControl("register", payload, (result) => {
+				if (!ownsWork(work)) return;
+				finishWork(work);
+				if (result.success === true) {
+					const ready = parseReadyResponse(HttpService.JSONEncode(result), false);
+					if (ready !== undefined) { cachedReady = ready; invokeCallback("WebSocket ready", () => currentOptions.onReady(ready)); }
+				} else warn("[robloxstudio-mcp] WebSocket metadata refresh failed; reconnecting");
+				if (result.success !== true) { refreshRequested = true; scheduleReconnect(work.generation, "Metadata refresh failed"); }
+				else flushRefresh();
+			});
+			if (!sent) { finishWork(work); refreshRequested = true; scheduleReconnect(work.generation, "Metadata channel unavailable"); }
+		}, () => { finishWork(work); refreshRequested = true; scheduleReconnect(work.generation, "Metadata discovery failed"); });
+		return;
+	}
 	// Only explicit metadata changes are queued. Failure alone never schedules
 	// more HTTP requests or replaces a healthy transport.
 	const work: TransportWork = { generation, options: currentOptions, stage: "" };
@@ -770,4 +911,4 @@ function stop(): void {
 	if (currentOptions !== undefined) disconnectSession(currentOptions);
 }
 
-export = { start, refresh, suspendForShutdown, resumeAfterShutdownFailure, stop };
+export = { start, refresh, requestPeerControl, suspendForShutdown, resumeAfterShutdownFailure, stop };

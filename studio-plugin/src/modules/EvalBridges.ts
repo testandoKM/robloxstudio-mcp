@@ -29,6 +29,7 @@
 
 import { Players, ReplicatedStorage, RunService, ServerScriptService, StarterPlayer } from "@rbxts/services";
 import PeerRole from "./PeerRole";
+import PluginScope from "./PluginScope";
 
 const ScriptEditorService = game.GetService("ScriptEditorService");
 
@@ -36,15 +37,15 @@ function getStarterPlayerScripts(): Instance | undefined {
 	return StarterPlayer.FindFirstChild("StarterPlayerScripts");
 }
 
-const SERVER_SCRIPT_NAME = "__MCP_ServerEvalBridge";
-const CLIENT_SCRIPT_NAME = "__MCP_ClientEvalBridge";
+const SERVER_SCRIPT_NAME = PluginScope.name("__MCP_ServerEvalBridge");
+const CLIENT_SCRIPT_NAME = PluginScope.name("__MCP_ClientEvalBridge");
 
 // Public so the eval_*_runtime tool wrappers can reference the same names.
 export const BRIDGE_NAMES = {
 	serverScript: SERVER_SCRIPT_NAME,
 	clientScript: CLIENT_SCRIPT_NAME,
-	serverLocal: "__MCP_ServerEvalLocal",
-	clientLocal: "__MCP_ClientEvalBridge",
+	serverLocal: PluginScope.name("__MCP_ServerEvalLocal"),
+	clientLocal: PluginScope.name("__MCP_ClientEvalBridge"),
 } as const;
 
 // Embedded Luau. The double `${...}` references our exported names so a

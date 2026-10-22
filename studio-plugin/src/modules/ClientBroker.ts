@@ -1,4 +1,4 @@
-import { HttpService, Players, ReplicatedStorage, RunService, Workspace } from "@rbxts/services";
+import { Players, ReplicatedStorage, RunService, Workspace } from "@rbxts/services";
 import RuntimeLogBuffer from "./RuntimeLogBuffer";
 import MemoryHandlers from "./handlers/MemoryHandlers";
 import SceneAnalysisHandlers from "./handlers/SceneAnalysisHandlers";
@@ -11,10 +11,11 @@ import BreakpointHandlers from "./handlers/BreakpointHandlers";
 import ScriptProfilerHandlers from "./handlers/ScriptProfilerHandlers";
 import MicroProfilerHandlers from "./handlers/MicroProfilerHandlers";
 import LuauExec from "./LuauExec";
-import HttpDiagnostics from "./HttpDiagnostics";
+import StudioWebSocket from "./StudioWebSocket";
 import PluginSession from "./PluginSession";
 import TopologyId from "./TopologyId";
 import PeerRole from "./PeerRole";
+import PluginScope from "./PluginScope";
 import type { StudioRequestContext } from "../types";
 
 interface StudioTestServiceMultiplayer extends StudioTestService {
@@ -32,7 +33,7 @@ const StudioTestService = game.GetService("StudioTestService") as StudioTestServ
 
 const DEFAULT_MCP_URL = "http://localhost:58741";
 let mcpUrl = DEFAULT_MCP_URL;
-const BROKER_NAME = "__MCPClientBroker";
+const BROKER_NAME = PluginScope.name("__MCPClientBroker");
 const BROKER_OWNER_ATTRIBUTE = "__MCPBrokerOwner";
 const CLIENT_IDENTITY_KIND = "identity";
 // A normal capture needs at most 15s sampling + 5s waiting for profiler data.
@@ -102,21 +103,6 @@ const CLIENT_BROKER_ALLOWED_ENDPOINTS = new Set<string>([
 
 function forkRole(): "edit" | "server" | "client" {
 	return PeerRole.detect();
-}
-
-function postJson(endpoint: string, body: Record<string, unknown>) {
-	return pcall(() =>
-		HttpService.RequestAsync({
-			Url: `${mcpUrl}${endpoint}`,
-			Method: "POST",
-			Headers: { "Content-Type": "application/json" },
-			Body: HttpService.JSONEncode(body),
-		}),
-	);
-}
-
-function formatPostJsonFailure(endpoint: string, ok: boolean, res: unknown): string {
-	return HttpDiagnostics.formatRequestFailure(`${mcpUrl}${endpoint}`, ok, res);
 }
 
 function setServerUrl(serverUrl: string | undefined): void {
@@ -332,14 +318,15 @@ function proxyRetryDelay(attempt: number): number {
 }
 function deliverProxyDisconnect(peerId: string, attempt: number): void {
 	if (!pendingProxyDisconnects.has(peerId)) return;
-	const [ok, response] = postJson("/disconnect", { peerId });
-	if (ok && response && response.Success) {
+	if (!RunService.IsRunning() || proxyByPeerId.has(peerId)) {
 		pendingProxyDisconnects.delete(peerId);
 		return;
 	}
-	task.delay(proxyRetryDelay(attempt + 1), () => {
-		deliverProxyDisconnect(peerId, attempt + 1);
-	});
+	const retry = () => task.delay(proxyRetryDelay(attempt + 1), () => deliverProxyDisconnect(peerId, attempt + 1));
+	if (!StudioWebSocket.requestPeerControl("unregister", { peerId }, (result) => {
+		if (result.success === true || result.error === "peer_control_owner_mismatch") pendingProxyDisconnects.delete(peerId);
+		else retry();
+	})) retry();
 }
 
 function queueProxyDisconnect(peerId: string): void {
@@ -349,10 +336,7 @@ function queueProxyDisconnect(peerId: string): void {
 }
 
 
-function parseAssignedRole(body: string, entry: ProxyEntry): string | undefined {
-	const [decodeOk, decoded] = pcall(() => HttpService.JSONDecode(body));
-	if (!decodeOk || !typeIs(decoded, "table")) return undefined;
-	const ready = decoded as Record<string, unknown>;
+function parseAssignedRole(ready: Record<string, unknown>, entry: ProxyEntry): string | undefined {
 	if (
 		ready.success !== true ||
 		ready.peerId !== entry.peerId ||
@@ -411,35 +395,40 @@ function registerProxyEntry(entry: ProxyEntry): void {
 		entry.instanceId,
 		entry.multiplayerGroupId,
 	);
-	const [ok, res] = postJson("/ready", readyPayload);
-	if (proxyByPlayer.get(entry.player) !== entry) {
-		if (ok && res && res.Success) {
-			queueProxyDisconnect(entry.peerId);
+	// Payload discovery can yield; do not send stale topology after a refresh.
+	if (proxyByPlayer.get(entry.player) !== entry || entry.generation !== expectedGeneration) return;
+	const sent = StudioWebSocket.requestPeerControl("register", readyPayload, (res) => {
+		if (proxyByPlayer.get(entry.player) !== entry) {
+			if (res.success === true) {
+				queueProxyDisconnect(entry.peerId);
+			}
+			return;
 		}
-		return;
-	}
-	if (entry.generation !== expectedGeneration) {
+		if (entry.generation !== expectedGeneration) {
+			return;
+		}
 		entry.registering = false;
-		if (!entry.registered) task.spawn(registerProxyEntry, entry);
-		return;
-	}
-	entry.registering = false;
 
-	if (!ok || !res || !res.Success) {
-		failProxyRegistration(entry, formatPostJsonFailure("/ready", ok, res));
-		return;
-	}
-	const assignedRole = parseAssignedRole(res.Body, entry);
-	if (assignedRole === undefined) {
-		failProxyRegistration(entry, "invalid /ready response for client Peer topology");
-		return;
-	}
-	entry.role = assignedRole;
-	entry.registered = true;
-	entry.retryAttempt = 0;
-	if (proxyRegisterFailuresByPlayer.has(entry.player)) {
-		proxyRegisterFailuresByPlayer.delete(entry.player);
-		print(`[robloxstudio-mcp] proxy registered for ${entry.player.Name} as ${assignedRole} via ${mcpUrl}`);
+		if (res.success !== true) {
+			failProxyRegistration(entry, tostring(res.error ?? "peer_control_rejected"));
+			return;
+		}
+		const assignedRole = parseAssignedRole(res, entry);
+		if (assignedRole === undefined) {
+			failProxyRegistration(entry, "invalid /ready response for client Peer topology");
+			return;
+		}
+		entry.role = assignedRole;
+		entry.registered = true;
+		entry.retryAttempt = 0;
+		if (proxyRegisterFailuresByPlayer.has(entry.player)) {
+			proxyRegisterFailuresByPlayer.delete(entry.player);
+			print(`[robloxstudio-mcp] proxy registered for ${entry.player.Name} as ${assignedRole} via ${mcpUrl}`);
+		}
+	});
+	if (!sent) {
+		entry.registering = false;
+		failProxyRegistration(entry, "server WebSocket is not ready");
 	}
 }
 

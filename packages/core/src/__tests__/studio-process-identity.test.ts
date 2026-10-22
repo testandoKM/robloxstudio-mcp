@@ -199,9 +199,10 @@ const dependencies: Plugin = {
   name: 'studio-session-identity-dependencies',
   setup(builder) {
     builder.onResolve({ filter: /^@rbxts\/services$/ }, () => ({ path: 'services', namespace: 'identity' }));
-    builder.onResolve({ filter: /^\.\/(State|PeerRole)$/ }, (args) => ({ path: args.path, namespace: 'identity' }));
+    builder.onResolve({ filter: /^\.\/(State|PeerRole|PluginScope)$/ }, (args) => ({ path: args.path, namespace: 'identity' }));
     builder.onLoad({ filter: /.*/, namespace: 'identity' }, (args) => {
       if (args.path === 'services') return { contents: 'module.exports = globalThis.identityServices;', loader: 'js' };
+      if (args.path === './PluginScope') return { contents: 'export default {name: (value) => value, isolated: false};', loader: 'js' };
       if (args.path === './PeerRole') {
         return { contents: 'export default { detect: () => globalThis.identityRole.current };', loader: 'js' };
       }

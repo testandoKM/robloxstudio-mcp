@@ -1,6 +1,7 @@
 import Utils from "../Utils";
 import PeerRole from "../PeerRole";
 import PluginSession from "../PluginSession";
+import type { SettingsStore } from "../PlaytestTickets";
 
 const { getInstanceByPath } = Utils;
 
@@ -9,7 +10,7 @@ const HttpService = game.GetService("HttpService");
 const LOG_PREFIX = "Breakpoint";
 const REGISTRY_KEY_PREFIX = "MCP_BREAKPOINTS_V1_";
 
-let pluginRef: Plugin | undefined;
+let pluginRef: SettingsStore | undefined;
 let loadedRegistryKey: string | undefined;
 let loadedRegistryFromSettings = false;
 
@@ -60,7 +61,7 @@ interface RegistryScope {
 
 const breakpoints = new Map<string, BreakpointEntry>();
 
-function init(p: Plugin): void {
+function init(p: SettingsStore): void {
 	pluginRef = p;
 }
 

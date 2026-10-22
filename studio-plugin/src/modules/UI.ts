@@ -1,6 +1,9 @@
 import { TweenService } from "@rbxts/services";
 import State from "./State";
 import ServerUrlSettings from "./ServerUrlSettings";
+import PluginScope from "./PluginScope";
+
+const DISPLAY_NAME = "__PLUGIN_DISPLAY_NAME__";
 
 interface UIElements {
 	screenGui: DockWidgetPluginGui;
@@ -134,12 +137,12 @@ function init(pluginRef: Plugin) {
 	const CURRENT_VERSION = State.CURRENT_VERSION;
 
 	const screenGui = pluginRef.CreateDockWidgetPluginGuiAsync(
-		"MCPServerInterface",
+		PluginScope.name("MCPServerInterface"),
 		// 3rd arg (initialEnabledShouldOverrideRestore=true) forces the dock closed
 		// at every Studio launch. User can still open via the toolbar button.
 		new DockWidgetPluginGuiInfo(Enum.InitialDockState.Float, false, true, 300, 260, 260, 200),
 	);
-	(screenGui as unknown as { Title: string }).Title = `MCP Server v${CURRENT_VERSION}`;
+	(screenGui as unknown as { Title: string }).Title = `${DISPLAY_NAME} v${CURRENT_VERSION}`;
 
 	const mainFrame = new Instance("Frame");
 	mainFrame.Size = new UDim2(1, 0, 1, 0);
@@ -165,7 +168,7 @@ function init(pluginRef: Plugin) {
 	titleLabel.Position = new UDim2(0, 10, 0, 2);
 	titleLabel.BackgroundTransparency = 1;
 	titleLabel.RichText = true;
-	titleLabel.Text = `<font color="#F0F0F0">MCP</font> <font color="#646464">v${CURRENT_VERSION}</font>`;
+	titleLabel.Text = `<font color="#F0F0F0">${DISPLAY_NAME}</font> <font color="#646464">v${CURRENT_VERSION}</font>`;
 	titleLabel.TextColor3 = C.white;
 	titleLabel.TextSize = 12;
 	titleLabel.Font = Enum.Font.GothamBold;
@@ -177,7 +180,7 @@ function init(pluginRef: Plugin) {
 	creditsLabel.Position = new UDim2(0, 10, 0, 23);
 	creditsLabel.BackgroundTransparency = 1;
 	creditsLabel.RichText = true;
-	creditsLabel.Text = '<font color="#999999">github</font> <font color="#CCCCCC">Chrrxs/robloxstudio-mcp</font>';
+	creditsLabel.Text = '<font color="#999999">testandoKM</font> <font color="#CCCCCC">· fork de Chrrxs</font>';
 	creditsLabel.TextColor3 = C.muted;
 	creditsLabel.TextSize = 8;
 	creditsLabel.Font = Enum.Font.GothamMedium;

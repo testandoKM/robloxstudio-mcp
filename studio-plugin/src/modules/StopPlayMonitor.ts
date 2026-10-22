@@ -4,6 +4,7 @@
 
 import { HttpService, RunService } from "@rbxts/services";
 import PluginSession from "./PluginSession";
+import type { SettingsStore } from "./PlaytestTickets";
 
 const StudioTestService = game.GetService("StudioTestService");
 
@@ -28,7 +29,7 @@ const REQUEST_TTL_SEC = 12.0;
 // same plugin. Redeliver the same request, without extending its deadline/TTL.
 const RETRY_INTERVAL_SEC = 1;
 
-let pluginRef: Plugin | undefined;
+let pluginRef: SettingsStore | undefined;
 let endTestIssued = false;
 let transportLifecycle: StopTransportLifecycle | undefined;
 let pendingRequest: { key: string; payload: StopPayload; lastPublishedAt: number } | undefined;
@@ -59,7 +60,7 @@ interface StopTransportLifecycle {
 	afterEndTestFailure: () => void;
 }
 
-function init(p: Plugin): void {
+function init(p: SettingsStore): void {
 	pluginRef = p;
 }
 

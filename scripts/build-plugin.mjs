@@ -34,9 +34,10 @@ const VARIANTS = {
   main: {
     scriptName: 'MCPPlugin',
     outputName: 'MCPPlugin.rbxmx',
-    toolbarName: 'MCP Integration',
-    buttonTitle: 'MCP Server',
-    buttonTooltip: 'Connect to MCP Server for AI Integration',
+    displayName: 'KMCP',
+    toolbarName: 'KMCP',
+    buttonTitle: 'KMCP',
+    buttonTooltip: 'KMCP - Connect Roblox Studio to your AI assistant',
     buttonIconDisconnected: '75876056391496',  // red
     buttonIconConnecting: '71302583919560',    // yellow
     buttonIconConnected: '130958234173611',    // green
@@ -44,9 +45,10 @@ const VARIANTS = {
   inspector: {
     scriptName: 'MCPInspectorPlugin',
     outputName: 'MCPInspectorPlugin.rbxmx',
-    toolbarName: 'MCP Inspector',
-    buttonTitle: 'MCP Inspector',
-    buttonTooltip: 'Connect to MCP Inspector (read-only) for AI Integration',
+    displayName: 'KMCP Inspector',
+    toolbarName: 'KMCP Inspector',
+    buttonTitle: 'KMCP Inspector',
+    buttonTooltip: 'KMCP Inspector - Connect Roblox Studio in read-only mode',
     buttonIconDisconnected: '125921838360800', // TODO: replace with white-variant asset ID
     buttonIconConnecting: '125921838360800',   // TODO: replace with yellow-variant asset ID
     buttonIconConnected: '125921838360800',    // TODO: replace with green-variant asset ID
@@ -72,6 +74,7 @@ function injectVersion(source) {
   return source
     .replace(/__VERSION__/g, VERSION)
     .replace(/__PLUGIN_VARIANT__/g, variantName)
+    .replace(/__PLUGIN_DISPLAY_NAME__/g, variant.displayName)
     .replace(/__TOOLBAR_NAME__/g, variant.toolbarName)
     .replace(/__BUTTON_TITLE__/g, variant.buttonTitle)
     .replace(/__BUTTON_TOOLTIP__/g, variant.buttonTooltip)

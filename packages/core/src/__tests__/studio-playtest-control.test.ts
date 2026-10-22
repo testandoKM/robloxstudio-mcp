@@ -6,6 +6,7 @@ import { build as esbuildBuild, type Plugin } from 'esbuild';
 interface TestHandlersModule {
   startPlaytest(request: Record<string, unknown>): Record<string, unknown>;
   stopPlaytest(request: Record<string, unknown>): Record<string, unknown>;
+  getPlaytestState(request: Record<string, unknown>): Record<string, unknown>;
 }
 
 function repositoryRoot(): string {
@@ -59,6 +60,7 @@ function pluginModule(): Promise<string> {
 
 async function createHarness(editModeActive = false) {
   const spawned: Array<() => void> = [];
+  let spawnImmediately = false;
   let now = 0;
   let onWait: () => void = () => undefined;
   const studioTestService = {
@@ -86,7 +88,7 @@ async function createHarness(editModeActive = false) {
     game: { GetService: () => studioTestService },
     tick: () => now,
     task: {
-      spawn: (callback: () => void) => { spawned.push(callback); },
+      spawn: (callback: () => void) => { if (spawnImmediately) callback(); else spawned.push(callback); },
       wait: (seconds: number) => {
         now = Math.round((now + seconds) * 1000) / 1000;
         if (now > 11) throw new Error('Playtest teardown exceeded its bounded wait');
@@ -94,6 +96,7 @@ async function createHarness(editModeActive = false) {
       },
     },
     pcall: robloxPcall,
+    tostring: String,
     warn: () => undefined,
   });
   vm.runInContext(await pluginModule(), context);
@@ -107,6 +110,7 @@ async function createHarness(editModeActive = false) {
     get now() { return now; },
     get scheduledCount() { return spawned.length; },
     onWait(callback: () => void) { onWait = callback; },
+    runSpawnImmediately() { spawnImmediately = true; },
     finishExecution() {
       const callback = spawned.shift();
       if (callback === undefined) throw new Error('No playtest execution is scheduled');
@@ -116,6 +120,45 @@ async function createHarness(editModeActive = false) {
 }
 
 describe('Studio playtest lifecycle control', () => {
+  test('does not admit a second native execution while the previous coroutine is pending in Edit', async () => {
+    const harness = await createHarness(true);
+    expect(harness.handlers.startPlaytest({ mode: 'play' }).success).toBe(true);
+    // Edit VM IsRunning remains false, including before startup and during teardown.
+    const second = harness.handlers.startPlaytest({ mode: 'run' });
+    expect(second.success).toBe(false);
+    expect(second.playtestTaskPending).toBe(true);
+    expect(harness.pluginSession.prepareSoloTest).toHaveBeenCalledTimes(1);
+    expect(harness.scheduledCount).toBe(1);
+    expect(harness.handlers.getPlaytestState({})).toEqual({ editModeReady: true, playtestTaskPending: true });
+  });
+
+  test('releases admission when topology preparation throws', async () => {
+    const harness = await createHarness(true);
+    harness.pluginSession.prepareSoloTest.mockImplementationOnce(() => { throw new Error('preparation failed'); });
+    expect(harness.handlers.startPlaytest({ mode: 'play' })).toMatchObject({ success: false, detail: expect.stringContaining('preparation failed') });
+    expect(harness.scheduledCount).toBe(0);
+    expect(harness.handlers.startPlaytest({ mode: 'play' }).success).toBe(true);
+  });
+
+  test('releases admission even when topology cleanup throws', async () => {
+    const harness = await createHarness(true);
+    harness.pluginSession.finishTest.mockImplementationOnce(() => { throw new Error('cleanup failed'); });
+    harness.handlers.startPlaytest({ mode: 'play' });
+    expect(() => harness.finishExecution()).not.toThrow();
+    expect(harness.handlers.stopPlaytest({}).success).toBe(true);
+    expect(harness.handlers.startPlaytest({ mode: 'run' }).success).toBe(true);
+  });
+
+  test.each(['play', 'run'])('reports an immediate native %s error instead of claiming startup succeeded', async (mode) => {
+    const harness = await createHarness(true);
+    harness.runSpawnImmediately();
+    const native = mode === 'play' ? harness.studioTestService.ExecutePlayModeAsync : harness.studioTestService.ExecuteRunModeAsync;
+    native.mockImplementationOnce(() => { throw new Error("Start play hasn't finished yet"); });
+    expect(harness.handlers.startPlaytest({ mode })).toMatchObject({ success: false, detail: expect.stringContaining("hasn't finished yet") });
+    expect(harness.pluginSession.finishTest).toHaveBeenCalledTimes(1);
+    expect(harness.handlers.startPlaytest({ mode }).success).toBe(true);
+  });
+
   test.each(['tracked', 'manual'])('reconciles a lost acknowledgement after %s playtest teardown completes', async (mode) => {
     const harness = await createHarness(mode === 'tracked');
     if (mode === 'tracked') {
@@ -172,6 +215,7 @@ describe('Studio playtest lifecycle control', () => {
       success: false,
       error: 'Playtest teardown did not complete.',
       stopSignalAccepted: true,
+      teardownPending: true,
       editModeReady: false,
       timedOut: true,
     });

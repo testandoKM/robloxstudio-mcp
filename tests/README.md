@@ -71,6 +71,89 @@ The runner stops at the first failure and reports remaining checks as not run.
 | Play-server shutdown, peer unregistration, or plugin HTTP requests | `npm run test:studio:shutdown-http-slots` |
 | Release | `npm run test:e2e:full`, plus affected standalone payload/WebSocket probes above |
 
+### Directed fork transport probe in the existing VFX TEST
+
+The user authorized a directed Play/Stop probe in the already-open VFX TEST
+without another Windows account or replacing the installed plugin. This
+component probe uses its own loopback bridge and temporary modules; it does
+not run or satisfy the full plugin feature gate above.
+
+```bash
+node scripts/fork/vfx-transport-lab.mjs --official-control --play-cycles 1
+```
+
+This requires an active MCP controller and the exact VFX place/game identity
+checked by the helper. Prepare the Edit fixture before asking the user to press
+Play. Load the compiled transport in the real play-server VM and exercise the
+production shutdown hook. Verify server unregistration and another Edit reply,
+then remove the fixture and restore HTTP settings. Do not retry a failed native
+Play command without reconciling the actual state. See the controller protocol,
+successful manual run, and remaining API readiness limitation in
+[the fork investigation](../docs/fork/CONNECTION_RECOVERY.md).
+
+The user also authorized automatic Play/Stop component validation in that same
+VFX TEST, without installing the fork or creating another Windows account:
+
+```bash
+node scripts/fork/vfx-playtest-lab.mjs --vfx-directed
+```
+
+This helper loads the production TestHandlers and StopPlayMonitor temporarily,
+uses native settings under unique test keys, and runs two consecutive Play/Stop
+cycles. The core stop observer waits for native Edit readiness and execution
+completion without repeating EndTest. Its MCP controller protocol and limits
+are documented in the investigation linked above. Keep a pending native call's
+fixture alive until it drains; never cancel/destroy it to force another start.
+The directed component test still does not satisfy the full plugin gate.
+
+### Directed complete-package validation without installation
+
+The user explicitly authorized testing the complete package in the existing
+VFX TEST, without another Windows account or replacing the installed plugin:
+
+```bash
+node scripts/fork/vfx-package-lab.mjs --vfx-directed
+```
+
+The helper starts the actual built CLI on an isolated authenticated loopback
+port, verifies all packaged Sources, and bootstraps the complete plugin under
+native temporary Plugin objects in Edit, Server and Client. MCP calls exercise
+edit tooling, replay safety, server restart/reconnect, the real client broker,
+runtime eval, MicroProfiler and two automatic Play/Stop cycles. Root attribute
+`MCPIsolationScope` separates state/settings/handoff from the installed copy;
+absence preserves the ordinary plugin identifiers and settings store.
+
+This is a complete-package functional test in memory, not the native installed
+file loader or the full release suite. Do not bypass the profile/installer
+guards in existing runners. Controller details, verified hashes, cleanup and
+coverage are recorded in [the full-package report](../docs/fork/FULL_PACKAGE_VALIDATION.md).
+
+### Directed installed-file validation in VFX TEST
+
+The client registration regression can also run through the complete-package
+controller with `--client-recovery`. Its isolated loopback proxy deliberately
+withholds HTTP `/ready` responses while forwarding WebSockets, then verifies
+client registration and re-registration after a CLI restart. It releases held
+requests and closes only its owned listener/sockets during cleanup. This does
+not assume a particular Roblox HTTP concurrency limit. See
+[the client recovery evidence](../docs/fork/CLIENT_REGISTRATION_RECOVERY.md).
+
+```bash
+node scripts/fork/vfx-package-lab.mjs --vfx-directed --client-recovery
+```
+
+After the in-memory validation, the user explicitly authorized backing up the
+current installation and installing the fork without a second Windows account.
+The installed CLI and native file loader were exercised in a user-reopened VFX
+TEST: default namespace, all 45 packaged Sources in Edit/Server/Client, real
+runtime eval, two automatic Play/Stop cycles and connection recovery. No runtime
+bootstrap was used. The principal project remained outside the test.
+
+Backup, hashes, native results, Output findings and activation limits are in
+[the local installation report](../docs/fork/LOCAL_INSTALLATION.md). This directed
+installation check does not bypass or satisfy the dedicated-profile full release
+and managed lifecycle gates above.
+
 When `MCP_INSTANCE_ID` is unset, the runner starts the built MCP server as the
 required primary on the configured port and gives it a random, run-scoped auth
 token. Through authenticated `POST /mcp/manage_instance` calls, it snapshots

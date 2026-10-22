@@ -10,6 +10,7 @@ import StudioWebSocket from "../modules/StudioWebSocket";
 import PluginSession from "../modules/PluginSession";
 import BreakpointHandlers from "../modules/handlers/BreakpointHandlers";
 import * as RenderMonitor from "../modules/RenderMonitor";
+import PluginScope from "../modules/PluginScope";
 
 // Track render-loop liveness so input/screenshot tools can report "window
 // minimized / not rendering" instead of silently no-op'ing. No-op in the
@@ -24,13 +25,14 @@ RuntimeLogBuffer.install();
 // Share the plugin reference with the stop-play signaling module so both the
 // edit DM (write the flag) and the play-server DM (read+act on the flag) can
 // access plugin:SetSetting/GetSetting.
-StopPlayMonitor.init(plugin);
-BreakpointHandlers.init(plugin);
-ServerUrlSettings.init(plugin);
+const settingsStore = PluginScope.settings(plugin);
+StopPlayMonitor.init(settingsStore);
+BreakpointHandlers.init(settingsStore);
+ServerUrlSettings.init(settingsStore);
 // Before anything reads place keys: an edit session removes MCP attributes
 // that older plugin versions saved into the place, and hands its topology to
 // playtest DataModels through plugin settings instead.
-PluginSession.init(plugin, { getServerUrl: () => State.getActiveConnection().serverUrl });
+PluginSession.init(settingsStore, { getServerUrl: () => State.getActiveConnection().serverUrl });
 
 const startupRole = ClientBroker.forkRole();
 
@@ -76,7 +78,7 @@ function registerToolbarButton() {
 	}
 	toolbarButtonRegistered = true;
 
-	const toolbar = plugin.CreateToolbar("__TOOLBAR_NAME__");
+	const toolbar = plugin.CreateToolbar(PluginScope.name("__TOOLBAR_NAME__"));
 	const button = toolbar.CreateButton("__BUTTON_TITLE__", "__BUTTON_TOOLTIP__", ICON_DISCONNECTED);
 	UI.setToolbarButton(button, { disconnected: ICON_DISCONNECTED, connecting: ICON_CONNECTING, connected: ICON_CONNECTED });
 
@@ -98,6 +100,9 @@ elements.connectButton.Activated.Connect(() => {
 
 plugin.Unloading.Connect(() => {
 	Communication.deactivateAll();
+	PluginSession.dispose();
+	RuntimeLogBuffer.uninstall();
+	RenderMonitor.stop();
 });
 
 

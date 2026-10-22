@@ -13,6 +13,7 @@ import { RunService } from "@rbxts/services";
 
 let lastFrame = 0;
 let connected = false;
+let frameConnection: RBXScriptConnection | undefined;
 
 // Above this many seconds since the last rendered frame, we treat the window
 // as not rendering. RenderStepped normally fires every ~16ms; a multi-second
@@ -26,7 +27,7 @@ export function start(): void {
 	// throws in the play-server DM. pcall so a server-DM call is a safe no-op
 	// (connected stays false → notRenderingReason() returns undefined there).
 	const [ok] = pcall(() => {
-		RunService.RenderStepped.Connect(() => {
+		frameConnection = RunService.RenderStepped.Connect(() => {
 			lastFrame = tick();
 		});
 	});
@@ -34,6 +35,12 @@ export function start(): void {
 		connected = true;
 		lastFrame = tick();
 	}
+}
+
+export function stop(): void {
+	frameConnection?.Disconnect();
+	frameConnection = undefined;
+	connected = false;
 }
 
 export function secondsSinceFrame(): number {

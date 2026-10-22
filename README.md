@@ -1,4 +1,8 @@
-# Roblox Studio MCP
+# KMCP
+
+KMCP is testandoKM's fork of [Chrrxs/robloxstudio-mcp](https://github.com/Chrrxs/robloxstudio-mcp).
+The Studio toolbar and panel use the KMCP name. See [FORK.md](FORK.md) for the
+fork's connection fixes, installation and validation status.
 
 Connect your coding agent directly to Roblox Studio. It can edit places, run Luau
 in live server and client contexts, start and stop playtests, and collect logs,
